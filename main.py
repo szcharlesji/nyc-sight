@@ -32,6 +32,7 @@ class App:
         self.alert_queue: asyncio.Queue[str] = asyncio.Queue()
         self.voice_queue: asyncio.Queue[str] = asyncio.Queue()
         self.vlm_trigger_queue: asyncio.Queue[str] = asyncio.Queue()
+        self._loop: asyncio.AbstractEventLoop | None = None
 
         source: int | str = args.video if args.video else 0
         self.camera = CameraLoop(self.buffer, source=source)
@@ -73,6 +74,7 @@ class App:
 
     def _start_backend(self) -> None:
         loop = asyncio.new_event_loop()
+        self._loop = loop
         self.buffer.set_loop(loop)
 
         self.camera.start()
@@ -121,12 +123,6 @@ class App:
                         value="",
                         interactive=False,
                     )
-                    response_box = gr.Textbox(
-                        label="Latest VLM Response",
-                        value="",
-                        lines=5,
-                        interactive=False,
-                    )
                     audio_out = gr.Audio(
                         label="TTS Output",
                         autoplay=True,
@@ -134,15 +130,35 @@ class App:
                     )
 
             with gr.Row():
-                text_input = gr.Textbox(
-                    label="Text Command (use when --no-mic)",
-                    placeholder="Type a question, e.g. 'What's in front of me?'",
-                )
-                send_btn = gr.Button("Send", variant="primary")
+                with gr.Column():
+                    lat_input = gr.Number(label="Latitude", value=40.7780, precision=6)
+                with gr.Column():
+                    lon_input = gr.Number(
+                        label="Longitude", value=-73.9812, precision=6
+                    )
 
-            with gr.Row():
-                lat_input = gr.Number(label="Latitude", value=40.7780, precision=6)
-                lon_input = gr.Number(label="Longitude", value=-73.9812, precision=6)
+            async def chat_fn(message: str, history):
+                frame = self.buffer.latest()
+                if frame is None:
+                    yield "No camera frame available yet — is the camera connected?"
+                    return
+                context = self.nyc.get_context()
+                async for partial in self.vlm.describe_stream(
+                    frame.image, message, context
+                ):
+                    yield partial
+
+            gr.ChatInterface(
+                fn=chat_fn,
+                examples=[
+                    "What's in front of me?",
+                    "Read that sign",
+                    "Is there scaffolding nearby?",
+                    "How do I get to the subway?",
+                    "What's around me?",
+                ],
+                fill_height=False,
+            )
 
             def refresh():
                 img = self._get_frame_jpeg()
@@ -152,23 +168,14 @@ class App:
                     img,
                     state.get("status", ""),
                     state.get("alert", ""),
-                    state.get("response", ""),
                     state.get("audio"),
                 )
 
             timer = gr.Timer(0.5)
             timer.tick(
                 fn=refresh,
-                outputs=[webcam, status_box, alert_box, response_box, audio_out],
+                outputs=[webcam, status_box, alert_box, audio_out],
             )
-
-            def on_send(text):
-                if text.strip():
-                    self.voice_queue.put_nowait(text.strip())
-                return ""
-
-            send_btn.click(fn=on_send, inputs=[text_input], outputs=[text_input])
-            text_input.submit(fn=on_send, inputs=[text_input], outputs=[text_input])
 
         return demo
 
