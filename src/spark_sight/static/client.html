@@ -328,13 +328,18 @@ function handleStatus(s) {
       ? 'goal: ' + (s.goal || '')
       : 'patrol mode';
 
-    if (s.signal && s.signal !== 'CLEAR') {
+    if (s.signal === 'TRANSCRIPT') {
+      // ASR transcript — show what the user said.
+      $signal.textContent = 'you said:';
+      $signal.className = '';
+      if (s.message) $message.textContent = s.message;
+      appendDebugLog('ASR: ' + (s.message || ''));
+    } else if (s.signal && s.signal !== 'CLEAR') {
       $signal.className = SIG_CLASS[s.signal] || '';
       $signal.textContent = s.signal;
       if (s.message) $message.textContent = s.message;
+      appendDebugLog(s.signal + (s.message ? ': ' + s.message : ''));
     }
-
-    appendDebugLog(s.signal + (s.message ? ': ' + s.message : ''));
   } else if (s.type === 'speech') {
     $message.textContent = s.text;
     appendDebugLog('TTS: ' + s.text);

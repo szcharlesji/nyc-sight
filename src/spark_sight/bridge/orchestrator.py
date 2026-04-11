@@ -196,6 +196,40 @@ class Orchestrator:
                     )
 
     # ------------------------------------------------------------------
+    # Transcript handling (ASR → Planning Agent)
+    # ------------------------------------------------------------------
+
+    async def handle_transcript(self, transcript: str) -> None:
+        """Route a voice transcript from ASR to the Planning Agent.
+
+        This is the callback used by :func:`asr_loop` when Parakeet
+        produces a non-empty transcription.
+        """
+        if not transcript.strip():
+            return
+
+        logger.info("Transcript received: %s", transcript[:120])
+
+        # Push transcript to the iPhone HUD.
+        if self._on_status:
+            snap = self.state.get_snapshot()
+            await self._on_status(
+                "TRANSCRIPT",
+                transcript,
+                snap.mode,
+                snap.active_goal,
+            )
+
+        if self.planning_agent is None:
+            logger.warning("No planning agent attached — cannot process transcript")
+            return
+
+        planning_response = await self.planning_agent.process(
+            {"transcript": transcript}
+        )
+        await self.handle_planning_response(planning_response)
+
+    # ------------------------------------------------------------------
     # Ambient processing loop
     # ------------------------------------------------------------------
 
