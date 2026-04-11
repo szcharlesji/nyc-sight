@@ -1,0 +1,356 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Spark Sight</title>
+<style>
+  * { margin: 0; box-sizing: border-box; }
+  body {
+    background: #000; color: #fff;
+    font: 16px/1.4 -apple-system, system-ui, sans-serif;
+    display: flex; flex-direction: column;
+    height: 100vh; height: 100dvh;
+    overflow: hidden;
+    -webkit-user-select: none; user-select: none;
+  }
+
+  /* Camera preview — fills background */
+  video {
+    position: absolute; inset: 0;
+    width: 100%; height: 100%; object-fit: cover;
+    z-index: 0;
+  }
+
+  /* Mic recording indicator */
+  #mic-indicator {
+    position: absolute; top: 56px; right: 16px; z-index: 10;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: #E24B4A;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  #mic-indicator.muted { background: #5F5E5A; animation: none; }
+  @keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+
+  /* HUD overlay at bottom */
+  #hud {
+    position: absolute; bottom: 0; left: 0; right: 0; z-index: 10;
+    background: linear-gradient(transparent, rgba(0,0,0,0.85));
+    padding: 32px 16px 40px;
+  }
+  #mode {
+    font-size: 12px; text-transform: uppercase; letter-spacing: 1px;
+    opacity: 0.6; margin-bottom: 4px;
+  }
+  #signal {
+    font-size: 14px; font-weight: 600; margin-bottom: 6px;
+    min-height: 20px; transition: color 0.2s;
+  }
+  #message {
+    font-size: 18px; line-height: 1.4;
+    min-height: 50px;
+  }
+
+  /* Signal colors */
+  .sig-warning    { color: #EF9F27; }
+  .sig-progress   { color: #85B7EB; }
+  .sig-correction { color: #F0997B; }
+  .sig-goal       { color: #5DCAA5; }
+  .sig-failure    { color: #F09595; }
+
+  /* Start overlay */
+  #start-overlay {
+    position: absolute; inset: 0; z-index: 100;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(0,0,0,0.8);
+  }
+  #start-overlay.hidden { display: none; }
+  #start-btn {
+    background: #fff; color: #000;
+    font-size: 20px; font-weight: 600;
+    padding: 16px 40px; border: none; border-radius: 12px;
+    cursor: pointer;
+  }
+
+  /* Debug panel */
+  #debug-toggle {
+    position: absolute; top: 56px; left: 16px; z-index: 20;
+    background: rgba(255,255,255,0.15); border: none; color: #fff;
+    font-size: 11px; padding: 4px 10px; border-radius: 6px;
+    cursor: pointer;
+  }
+  #debug-panel {
+    position: absolute; top: 90px; left: 8px; right: 8px; z-index: 20;
+    background: rgba(0,0,0,0.85); border: 1px solid #333;
+    border-radius: 8px; padding: 12px; font-size: 12px;
+    max-height: 50vh; overflow-y: auto;
+    display: none;
+  }
+  #debug-panel.open { display: block; }
+  #debug-panel pre { white-space: pre-wrap; word-break: break-all; }
+  .dbg-label { color: #888; }
+  .dbg-value { color: #5DCAA5; }
+</style>
+</head>
+<body>
+
+<video id="preview" autoplay playsinline muted></video>
+<div id="mic-indicator" class="muted"></div>
+
+<button id="debug-toggle">DEBUG</button>
+<div id="debug-panel">
+  <div><span class="dbg-label">WS: </span><span id="dbg-ws" class="dbg-value">—</span></div>
+  <div><span class="dbg-label">FPS out: </span><span id="dbg-fps" class="dbg-value">0</span></div>
+  <div><span class="dbg-label">Frames sent: </span><span id="dbg-frames" class="dbg-value">0</span></div>
+  <div><span class="dbg-label">Audio chunks: </span><span id="dbg-audio" class="dbg-value">0</span></div>
+  <div><span class="dbg-label">Messages in: </span><span id="dbg-msgs" class="dbg-value">0</span></div>
+  <hr style="border-color:#333; margin:8px 0;">
+  <div class="dbg-label">Recent signals:</div>
+  <pre id="dbg-log"></pre>
+</div>
+
+<div id="hud">
+  <div id="mode">—</div>
+  <div id="signal"></div>
+  <div id="message">tap start to begin</div>
+</div>
+
+<div id="start-overlay">
+  <button id="start-btn">Start Spark Sight</button>
+</div>
+
+<script>
+// ── Constants ──────────────────────────────────────────
+const TARGET_FPS = 4;
+const FRAME_W = 1280;
+const FRAME_H = 720;
+const JPEG_QUALITY = 0.7;
+const MSG_FRAME  = 0x01;
+const MSG_AUDIO  = 0x02;
+const MSG_TTS    = 0x03;
+const MSG_STATUS = 0x04;
+const RECONNECT_DELAY = 2000;
+const MAX_DEBUG_LINES = 40;
+
+// ── State ──────────────────────────────────────────────
+let ws = null;
+let audioCtx = null;
+let mediaStream = null;
+let frameInterval = null;
+let stats = { frames: 0, audio: 0, msgsIn: 0, fpsTicks: [] };
+
+// ── DOM refs ───────────────────────────────────────────
+const $mode    = document.getElementById('mode');
+const $signal  = document.getElementById('signal');
+const $message = document.getElementById('message');
+const $mic     = document.getElementById('mic-indicator');
+const $overlay = document.getElementById('start-overlay');
+const $dbgWs   = document.getElementById('dbg-ws');
+const $dbgFps  = document.getElementById('dbg-fps');
+const $dbgFr   = document.getElementById('dbg-frames');
+const $dbgAu   = document.getElementById('dbg-audio');
+const $dbgMs   = document.getElementById('dbg-msgs');
+const $dbgLog  = document.getElementById('dbg-log');
+
+// ── Debug panel toggle ─────────────────────────────────
+document.getElementById('debug-toggle').addEventListener('click', () => {
+  document.getElementById('debug-panel').classList.toggle('open');
+});
+
+// ── Start (requires user gesture for Safari) ───────────
+document.getElementById('start-btn').addEventListener('click', async () => {
+  $overlay.classList.add('hidden');
+  await init();
+});
+
+async function init() {
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      video: { facingMode: 'environment', width: { ideal: FRAME_W }, height: { ideal: FRAME_H } },
+      audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+    });
+  } catch (err) {
+    $message.textContent = 'Camera/mic access denied: ' + err.message;
+    return;
+  }
+
+  document.getElementById('preview').srcObject = mediaStream;
+  $mic.classList.remove('muted');
+
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+
+  connectWS();
+}
+
+// ── WebSocket ──────────────────────────────────────────
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
+  ws = new WebSocket(proto + '//' + location.host + '/ws');
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    $dbgWs.textContent = 'connected';
+    $mode.textContent = 'patrol mode';
+    startFrameCapture();
+    startMicCapture();
+  };
+
+  ws.onmessage = (evt) => {
+    stats.msgsIn++;
+    $dbgMs.textContent = stats.msgsIn;
+
+    const data = new Uint8Array(evt.data);
+    if (data.length < 1) return;
+    const type = data[0];
+    const payload = data.slice(1);
+
+    if (type === MSG_TTS) {
+      playTTS(payload.buffer);
+    } else if (type === MSG_STATUS) {
+      try {
+        const status = JSON.parse(new TextDecoder().decode(payload));
+        handleStatus(status);
+      } catch (e) { /* ignore parse errors */ }
+    }
+  };
+
+  ws.onclose = () => {
+    $dbgWs.textContent = 'disconnected';
+    $mode.textContent = 'reconnecting...';
+    stopFrameCapture();
+    setTimeout(connectWS, RECONNECT_DELAY);
+  };
+
+  ws.onerror = () => {
+    $dbgWs.textContent = 'error';
+  };
+}
+
+// ── Camera frame streaming ─────────────────────────────
+function startFrameCapture() {
+  const canvas = document.createElement('canvas');
+  canvas.width = FRAME_W;
+  canvas.height = FRAME_H;
+  const ctx = canvas.getContext('2d');
+  const video = document.getElementById('preview');
+
+  frameInterval = setInterval(() => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    ctx.drawImage(video, 0, 0, FRAME_W, FRAME_H);
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      blob.arrayBuffer().then((buf) => {
+        const jpeg = new Uint8Array(buf);
+        const msg = new Uint8Array(1 + jpeg.length);
+        msg[0] = MSG_FRAME;
+        msg.set(jpeg, 1);
+        ws.send(msg);
+
+        stats.frames++;
+        stats.fpsTicks.push(Date.now());
+        $dbgFr.textContent = stats.frames;
+      });
+    }, 'image/jpeg', JPEG_QUALITY);
+  }, 1000 / TARGET_FPS);
+}
+
+function stopFrameCapture() {
+  if (frameInterval) { clearInterval(frameInterval); frameInterval = null; }
+}
+
+// ── Mic audio streaming ────────────────────────────────
+function startMicCapture() {
+  const source = audioCtx.createMediaStreamSource(mediaStream);
+  const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+
+  processor.onaudioprocess = (e) => {
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+
+    const f32 = e.inputBuffer.getChannelData(0);
+    const pcm = new Int16Array(f32.length);
+    for (let i = 0; i < f32.length; i++) {
+      const s = Math.max(-1, Math.min(1, f32[i]));
+      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+
+    const pcmBytes = new Uint8Array(pcm.buffer);
+    const msg = new Uint8Array(1 + pcmBytes.length);
+    msg[0] = MSG_AUDIO;
+    msg.set(pcmBytes, 1);
+    ws.send(msg);
+
+    stats.audio++;
+    $dbgAu.textContent = stats.audio;
+  };
+
+  source.connect(processor);
+  processor.connect(audioCtx.destination);
+}
+
+// ── TTS playback ───────────────────────────────────────
+async function playTTS(wavBuffer) {
+  if (audioCtx.state === 'suspended') await audioCtx.resume();
+  try {
+    const buf = await audioCtx.decodeAudioData(wavBuffer.slice(0));
+    const src = audioCtx.createBufferSource();
+    src.buffer = buf;
+    src.connect(audioCtx.destination);
+    src.start(0);
+  } catch {
+    const blob = new Blob([wavBuffer], { type: 'audio/wav' });
+    const audio = new Audio(URL.createObjectURL(blob));
+    audio.play().catch(() => {});
+  }
+}
+
+// ── HUD status updates ────────────────────────────────
+const SIG_CLASS = {
+  WARNING:      'sig-warning',
+  PROGRESS:     'sig-progress',
+  CORRECTION:   'sig-correction',
+  GOAL_REACHED: 'sig-goal',
+  FAILURE:      'sig-failure',
+};
+
+function handleStatus(s) {
+  if (s.type === 'status') {
+    $mode.textContent = s.mode === 'goal'
+      ? 'goal: ' + (s.goal || '')
+      : 'patrol mode';
+
+    if (s.signal && s.signal !== 'CLEAR') {
+      $signal.className = SIG_CLASS[s.signal] || '';
+      $signal.textContent = s.signal;
+      if (s.message) $message.textContent = s.message;
+    }
+
+    appendDebugLog(s.signal + (s.message ? ': ' + s.message : ''));
+  } else if (s.type === 'speech') {
+    $message.textContent = s.text;
+    appendDebugLog('TTS: ' + s.text);
+  } else if (s.type === 'transcript') {
+    $signal.textContent = 'you said:';
+    $signal.className = '';
+    $message.textContent = s.text;
+    appendDebugLog('ASR: ' + s.text);
+  }
+}
+
+// ── Debug helpers ──────────────────────────────────────
+function appendDebugLog(line) {
+  const lines = $dbgLog.textContent.split('\n').filter(Boolean);
+  lines.push(new Date().toLocaleTimeString() + '  ' + line);
+  while (lines.length > MAX_DEBUG_LINES) lines.shift();
+  $dbgLog.textContent = lines.join('\n');
+}
+
+// FPS counter — update every second
+setInterval(() => {
+  const now = Date.now();
+  stats.fpsTicks = stats.fpsTicks.filter(t => now - t < 1000);
+  $dbgFps.textContent = stats.fpsTicks.length;
+}, 1000);
+</script>
+</body>
+</html>
