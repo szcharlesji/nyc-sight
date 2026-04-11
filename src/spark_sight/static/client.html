@@ -164,14 +164,23 @@ document.getElementById('start-btn').addEventListener('click', async () => {
 });
 
 async function init() {
+  // Try rear camera first (iPhone), fall back to any camera (Mac/desktop).
+  const audioConstraints = { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true };
   try {
     mediaStream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'environment', width: { ideal: FRAME_W }, height: { ideal: FRAME_H } },
-      audio: { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true }
+      video: { facingMode: { ideal: 'environment' }, width: { ideal: FRAME_W }, height: { ideal: FRAME_H } },
+      audio: audioConstraints
     });
-  } catch (err) {
-    $message.textContent = 'Camera/mic access denied: ' + err.message;
-    return;
+  } catch {
+    try {
+      mediaStream = await navigator.mediaDevices.getUserMedia({
+        video: { width: { ideal: FRAME_W }, height: { ideal: FRAME_H } },
+        audio: audioConstraints
+      });
+    } catch (err) {
+      $message.textContent = 'Camera/mic access denied: ' + err.message;
+      return;
+    }
   }
 
   document.getElementById('preview').srcObject = mediaStream;
