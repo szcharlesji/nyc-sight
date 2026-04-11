@@ -17,9 +17,10 @@ from spark_sight.bridge.prompt_state import PromptState
 
 logger = logging.getLogger(__name__)
 
-# Default NIM endpoint for Nemotron Super running locally on the GB10.
-_DEFAULT_NIM_BASE_URL = "http://localhost:8001/v1"
-_DEFAULT_MODEL = "nvidia/nemotron-super-120b"
+# Default NIM endpoint for Nemotron running locally on the GB10.
+# Port 8005 matches the Docker startup script (cos_nemo_docker.sh).
+_DEFAULT_NIM_BASE_URL = "http://localhost:8005/v1"
+_DEFAULT_MODEL = "nemotron-nano"
 
 _SYSTEM_PROMPT = """\
 You are the Planning Agent for Spark Sight, an accessibility assistant for \

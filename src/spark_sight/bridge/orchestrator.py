@@ -24,7 +24,9 @@ from spark_sight.bridge.models import (
 from spark_sight.bridge.prompt_state import PromptState
 
 if TYPE_CHECKING:
+    from spark_sight.agents.ambient import AmbientAgent
     from spark_sight.agents.base import BaseAgent
+    from spark_sight.server.frame_buffer import FrameBuffer
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +51,7 @@ class Orchestrator:
     - Dispatch Ambient Agent signals (GOAL_REACHED → reset, FAILURE → replan).
     - Dispatch Planning Agent actions (set_goal, inspect, reset, etc.).
     - Manage the speech output queue (WARNING preempts, planning queues).
+    - Run the continuous ambient frame-processing loop.
 
     Parameters
     ----------
@@ -58,13 +61,20 @@ class Orchestrator:
         The Ambient Agent instance (or ``None`` during bridge-only testing).
     planning_agent:
         The Planning Agent instance (or ``None`` during bridge-only testing).
+    frame_buffer:
+        Shared camera frame ring buffer (or ``None`` during bridge-only testing).
+    on_speech:
+        Async callback fired when speech is enqueued (e.g. to push to WebSocket).
+    on_status:
+        Async callback fired on ambient status changes (e.g. to push to HUD).
     """
 
     def __init__(
         self,
         prompt_state: PromptState,
-        ambient_agent: BaseAgent | None = None,
+        ambient_agent: AmbientAgent | None = None,
         planning_agent: BaseAgent | None = None,
+        frame_buffer: FrameBuffer | None = None,
         *,
         on_speech: SpeechCallback | None = None,
         on_status: StatusCallback | None = None,
@@ -72,6 +82,7 @@ class Orchestrator:
         self.state = prompt_state
         self.ambient_agent = ambient_agent
         self.planning_agent = planning_agent
+        self.frame_buffer = frame_buffer
 
         # External callbacks (registered by the server layer).
         self._on_speech = on_speech
@@ -146,12 +157,30 @@ class Orchestrator:
                     )
 
             case PlanningAction.INSPECT:
-                # Grab latest frame (placeholder) and query Ambient Agent.
                 if response.message:
                     await self._enqueue_speech(
                         SpeechPriority.PLANNING, response.message
                     )
-                # TODO: grab frame from buffer, send to ambient with inspect_prompt
+                # Grab latest frame and query the Ambient Agent.
+                if (
+                    self.ambient_agent is not None
+                    and self.frame_buffer is not None
+                    and response.inspect_prompt
+                ):
+                    frame = self.frame_buffer.latest_base64()
+                    if frame:
+                        inspect_result = await self.ambient_agent.inspect(
+                            frame, response.inspect_prompt
+                        )
+                        if inspect_result.message:
+                            await self._enqueue_speech(
+                                SpeechPriority.PLANNING, inspect_result.message
+                            )
+                    else:
+                        await self._enqueue_speech(
+                            SpeechPriority.PLANNING,
+                            "I can't see anything right now — no camera frame available.",
+                        )
 
             case PlanningAction.ANSWER:
                 if response.message:
@@ -165,6 +194,42 @@ class Orchestrator:
                     await self._enqueue_speech(
                         SpeechPriority.PLANNING, response.message
                     )
+
+    # ------------------------------------------------------------------
+    # Ambient processing loop
+    # ------------------------------------------------------------------
+
+    async def run_ambient_loop(self) -> None:
+        """Continuous frame-processing loop for the Ambient Agent.
+
+        Pulls the latest frame from the buffer, runs it through the
+        Ambient Agent, and routes the response.  Runs until cancelled.
+
+        The loop is naturally throttled by NIM inference latency (~250-500ms
+        per frame on Cosmos Reason2-8B), yielding ~2-4 FPS.
+        """
+        if self.ambient_agent is None or self.frame_buffer is None:
+            logger.warning("Ambient loop requires ambient_agent and frame_buffer")
+            return
+
+        logger.info("Ambient processing loop started")
+        while True:
+            frame = self.frame_buffer.latest_base64()
+            if frame is None:
+                await asyncio.sleep(0.1)  # no frames yet — back off
+                continue
+
+            try:
+                response = await self.ambient_agent.process(
+                    {"frame_base64": frame}
+                )
+                await self.handle_ambient_response(response)
+            except Exception:
+                logger.exception("Error in ambient loop iteration")
+
+            # Yield to the event loop.  No explicit FPS cap — inference
+            # latency is the natural governor.
+            await asyncio.sleep(0)
 
     # ------------------------------------------------------------------
     # Speech queue
@@ -213,6 +278,7 @@ class Orchestrator:
             logger.warning("No planning agent attached — cannot replan")
             return
         logger.info("Triggering replan: %s", failure_reason)
-        # The planning agent's process() will be called by the main loop
-        # with the failure reason as the trigger text.
-        # For now we just log — actual invocation handled by the run loop.
+        replan_response = await self.planning_agent.process(
+            {"failure_reason": failure_reason}
+        )
+        await self.handle_planning_response(replan_response)

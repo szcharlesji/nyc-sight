@@ -7,6 +7,7 @@ and the FastAPI server, then starts uvicorn.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 
 import uvicorn
@@ -43,6 +44,7 @@ def build_app(*, debug: bool = False):
         state,
         ambient_agent=ambient,
         planning_agent=planning,
+        frame_buffer=frame_buffer,
         on_speech=None,  # TTS not yet wired
         on_status=app.state.push_status,
     )
@@ -53,14 +55,28 @@ def build_app(*, debug: bool = False):
     app.state.planning_agent = planning
     app.state.prompt_state = state
 
+    # Background task handle for the ambient loop.
+    app.state._ambient_loop_task: asyncio.Task | None = None
+
     @app.on_event("startup")
     async def startup() -> None:
         await ambient.start()
         await planning.start()
-        logger.info("Spark Sight started — agents in stub mode, server ready")
+        # Start the continuous ambient frame-processing loop.
+        app.state._ambient_loop_task = asyncio.create_task(
+            orchestrator.run_ambient_loop()
+        )
+        logger.info("Spark Sight started — agents live, server ready")
 
     @app.on_event("shutdown")
     async def shutdown() -> None:
+        # Stop the ambient loop.
+        if app.state._ambient_loop_task is not None:
+            app.state._ambient_loop_task.cancel()
+            try:
+                await app.state._ambient_loop_task
+            except asyncio.CancelledError:
+                pass
         await ambient.stop()
         await planning.stop()
         logger.info("Spark Sight shut down")
@@ -71,7 +87,7 @@ def build_app(*, debug: bool = False):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Spark Sight server")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address")
-    parser.add_argument("--port", type=int, default=8000, help="Bind port")
+    parser.add_argument("--port", type=int, default=3000, help="Bind port")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument("--ssl-keyfile", default=None, help="SSL key file (for Safari camera access)")
     parser.add_argument("--ssl-certfile", default=None, help="SSL cert file")
