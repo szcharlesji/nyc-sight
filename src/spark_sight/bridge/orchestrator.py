@@ -144,6 +144,12 @@ class Orchestrator:
         - answer → speak directly (no vision needed).
         - reset → clear goal, revert to patrol.
         """
+        logger.info(
+            "[Planning] action=%s | msg=%s | goal=%s",
+            response.action,
+            (response.message or "-")[:80],
+            (response.goal or "-")[:40],
+        )
         match response.action:
             case PlanningAction.SET_GOAL | PlanningAction.REPLAN:
                 if response.goal:
@@ -242,24 +248,40 @@ class Orchestrator:
         The loop is naturally throttled by NIM inference latency (~250-500ms
         per frame on Cosmos Reason2-8B), yielding ~2-4 FPS.
         """
+        import time as _time
+
         if self.ambient_agent is None or self.frame_buffer is None:
             logger.warning("Ambient loop requires ambient_agent and frame_buffer")
             return
 
         logger.info("Ambient processing loop started")
+        frame_num = 0
         while True:
             frame = self.frame_buffer.latest_base64()
             if frame is None:
                 await asyncio.sleep(0.1)  # no frames yet — back off
                 continue
 
+            frame_num += 1
+            t0 = _time.time()
             try:
                 response = await self.ambient_agent.process(
                     {"frame_base64": frame}
                 )
+                dt = round((_time.time() - t0) * 1000)
+                snap = self.state.get_snapshot()
+                logger.info(
+                    "[Ambient #%d] %s | %dms | mode=%s | goal=%s | msg=%s",
+                    frame_num,
+                    response.signal,
+                    dt,
+                    snap.mode,
+                    (snap.active_goal or "-")[:40],
+                    (response.message or "-")[:60],
+                )
                 await self.handle_ambient_response(response)
             except Exception:
-                logger.exception("Error in ambient loop iteration")
+                logger.exception("Error in ambient loop iteration #%d", frame_num)
 
             # Yield to the event loop.  No explicit FPS cap — inference
             # latency is the natural governor.

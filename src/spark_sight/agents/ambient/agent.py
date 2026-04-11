@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -158,6 +159,9 @@ class AmbientAgent(BaseAgent):
                 _SYSTEM_PROMPT + f"\n\n--- GOAL PROMPT ---\n{compiled}"
             )
 
+        mode = "inspect" if prompt_override else "ambient"
+        logger.debug("[Cosmos] %s call (frame=%d bytes)", mode, len(frame_b64))
+
         try:
             response = await self._client.chat.completions.create(
                 model=self._model,
@@ -180,7 +184,7 @@ class AmbientAgent(BaseAgent):
             )
             return self._parse_response(response)
         except Exception:
-            logger.exception("NIM inference failed")
+            logger.exception("[Cosmos] NIM inference failed")
             return AmbientResponse(signal=AmbientSignal.CLEAR)
 
     async def inspect(self, frame_base64: str, prompt: str) -> AmbientResponse:
@@ -202,10 +206,20 @@ class AmbientAgent(BaseAgent):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _strip_think(text: str) -> str:
+        """Remove chain-of-thought ``<think>`` blocks from Cosmos output."""
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        if "</think>" in text:
+            text = text.split("</think>", 1)[1].strip()
+        return text
+
     def _parse_response(self, response: Any) -> AmbientResponse:
         """Parse a NIM chat completion into an :class:`AmbientResponse`."""
         raw: str = response.choices[0].message.content or ""
-        raw = raw.strip()
+        logger.debug("[Cosmos raw] %s", raw[:300])
+
+        raw = self._strip_think(raw)
 
         # VLMs sometimes wrap JSON in markdown code fences.
         if raw.startswith("```"):
@@ -214,11 +228,16 @@ class AmbientAgent(BaseAgent):
         try:
             data = json.loads(raw)
             signal = AmbientSignal(data.get("signal", "CLEAR"))
-            return AmbientResponse(
+            result = AmbientResponse(
                 signal=signal,
                 message=data.get("message", ""),
                 reasoning=data.get("reasoning", ""),
             )
+            if signal != AmbientSignal.CLEAR:
+                logger.info(
+                    "[Cosmos] %s: %s", signal, result.message[:100]
+                )
+            return result
         except (json.JSONDecodeError, ValueError, KeyError):
-            logger.warning("Failed to parse Ambient response: %s", raw[:200])
+            logger.warning("[Cosmos] Failed to parse: %s", raw[:300])
             return AmbientResponse(signal=AmbientSignal.CLEAR)
