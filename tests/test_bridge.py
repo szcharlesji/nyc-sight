@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
 
+from spark_sight.agents.ambient import AmbientAgent
+from spark_sight.bridge.frame_buffer import FrameBuffer
 from spark_sight.bridge.models import (
     AgentMode,
     AmbientResponse,
@@ -181,3 +185,92 @@ class TestOrchestratorPlanning:
         )
         await orch.handle_planning_response(resp)
         assert state.get_mode() == AgentMode.PATROL
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator — Inspect routing
+# ---------------------------------------------------------------------------
+
+
+class TestOrchestratorInspect:
+    @pytest.mark.asyncio
+    async def test_inspect_calls_ambient_agent(self) -> None:
+        state = PromptState()
+        buf = FrameBuffer()
+        buf.push("test_frame")
+
+        mock_ambient = AsyncMock(spec=AmbientAgent)
+        mock_ambient.inspect.return_value = AmbientResponse(
+            signal=AmbientSignal.CLEAR, message="The sign says Broadway"
+        )
+
+        orch = Orchestrator(
+            state, ambient_agent=mock_ambient, frame_buffer=buf
+        )
+        resp = PlanningResponse(
+            action=PlanningAction.INSPECT,
+            message="Let me look at that for you.",
+            inspect_prompt="Read all visible text",
+        )
+        await orch.handle_planning_response(resp)
+
+        mock_ambient.inspect.assert_called_once_with("test_frame", "Read all visible text")
+        # Two speech items: the planning message + the inspect result.
+        _, text1 = await orch.next_speech()
+        assert "look at that" in text1
+        _, text2 = await orch.next_speech()
+        assert "Broadway" in text2
+
+    @pytest.mark.asyncio
+    async def test_inspect_no_frame_speaks_fallback(self) -> None:
+        state = PromptState()
+        buf = FrameBuffer()  # empty
+
+        mock_ambient = AsyncMock(spec=AmbientAgent)
+        orch = Orchestrator(
+            state, ambient_agent=mock_ambient, frame_buffer=buf
+        )
+        resp = PlanningResponse(
+            action=PlanningAction.INSPECT,
+            inspect_prompt="Read all visible text",
+        )
+        await orch.handle_planning_response(resp)
+
+        mock_ambient.inspect.assert_not_called()
+        _, text = await orch.next_speech()
+        assert "no camera frame" in text.lower()
+
+
+# ---------------------------------------------------------------------------
+# Orchestrator — Replan wiring
+# ---------------------------------------------------------------------------
+
+
+class TestOrchestratorReplan:
+    @pytest.mark.asyncio
+    async def test_failure_triggers_replan_on_planning_agent(self) -> None:
+        state = PromptState()
+        state.set_goal("Find subway")
+
+        mock_planning = AsyncMock()
+        mock_planning.process.return_value = PlanningResponse(
+            action=PlanningAction.REPLAN,
+            message="Rerouting via Broadway.",
+            goal="Take Broadway north to 72nd St",
+        )
+
+        orch = Orchestrator(state, planning_agent=mock_planning)
+
+        failure_resp = AmbientResponse(
+            signal=AmbientSignal.FAILURE, message="Path blocked by construction"
+        )
+        await orch.handle_ambient_response(failure_resp)
+
+        # Planning agent should have been called with the failure reason.
+        mock_planning.process.assert_called_once_with(
+            {"failure_reason": "Path blocked by construction"}
+        )
+        # The replan response should have set a new goal.
+        assert state.get_mode() == AgentMode.GOAL
+        snap = state.get_snapshot()
+        assert snap.active_goal == "Take Broadway north to 72nd St"
