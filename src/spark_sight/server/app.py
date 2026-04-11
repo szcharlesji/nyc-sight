@@ -145,9 +145,14 @@ def create_app(
 
     # ── Streaming chat endpoint ──────────────────────────────────────
 
+    def _strip_think(text: str) -> str:
+        """Remove ``<think>...</think>`` reasoning blocks."""
+        import re
+        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
     def _parse_planning_json(text: str) -> dict[str, Any]:
         """Best-effort parse of a Planning Agent JSON response."""
-        text = text.strip()
+        text = _strip_think(text)
         if text.startswith("```"):
             text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
         try:
@@ -197,10 +202,15 @@ def create_app(
 
         async def event_stream():
             full_text = ""
+            in_think = False  # Track <think> block for streaming display
+            t_start = time.time()
             client = AsyncOpenAI(
                 base_url=settings.nemotron.nim_url,
                 api_key="not-needed",
             )
+            # Emit debug: request info
+            yield f"data: {json.dumps({'type': 'debug', 'event': 'request', 'model': settings.nemotron.model, 'endpoint': settings.nemotron.nim_url, 'system_prompt_len': len(_PLANNING_PROMPT), 'user_content': user_content})}\n\n"
+
             try:
                 stream = await client.chat.completions.create(
                     model=settings.nemotron.model,
@@ -212,15 +222,34 @@ def create_app(
                     temperature=0.2,
                     stream=True,
                 )
+                first_token_time = None
+                token_count = 0
                 async for chunk in stream:
                     if chunk.choices and chunk.choices[0].delta.content:
                         token = chunk.choices[0].delta.content
                         full_text += token
+                        token_count += 1
+                        if first_token_time is None:
+                            first_token_time = time.time()
+
+                        # Track <think> blocks — don't show thinking tokens in chat
+                        if "<think>" in token:
+                            in_think = True
+                        if in_think:
+                            # Emit as debug-only token (hidden from chat bubble)
+                            yield f"data: {json.dumps({'type': 'think', 'content': token})}\n\n"
+                            if "</think>" in token:
+                                in_think = False
+                            continue
                         yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
 
+                t_end = time.time()
                 # Parse completed response.
                 parsed = _parse_planning_json(full_text)
                 yield f"data: {json.dumps({'type': 'done', **parsed})}\n\n"
+
+                # Emit debug: response stats
+                yield f"data: {json.dumps({'type': 'debug', 'event': 'response', 'raw_length': len(full_text), 'raw_output': full_text, 'tokens': token_count, 'ttft_ms': round((first_token_time - t_start) * 1000) if first_token_time else None, 'total_ms': round((t_end - t_start) * 1000), 'parsed_action': parsed.get('action')})}\n\n"
 
                 # Execute side-effects via Orchestrator.
                 if orchestrator and parsed.get("action", "answer") != "answer":

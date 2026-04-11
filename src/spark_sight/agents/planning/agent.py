@@ -174,10 +174,20 @@ class PlanningAgent(BaseAgent):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _strip_think(text: str) -> str:
+        """Remove ``<think>...</think>`` reasoning blocks from model output.
+
+        Nemotron-3-Nano-30B uses chain-of-thought wrapped in ``<think>``
+        tags.  This must be stripped before JSON parsing.
+        """
+        import re
+        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+
     def _parse_response(self, response: Any) -> PlanningResponse:
         """Parse a NIM chat completion into a :class:`PlanningResponse`."""
         raw: str = response.choices[0].message.content or ""
-        raw = raw.strip()
+        raw = self._strip_think(raw)
 
         # LLMs sometimes wrap JSON in markdown code fences.
         if raw.startswith("```"):

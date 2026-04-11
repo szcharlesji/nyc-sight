@@ -171,6 +171,24 @@
     padding: 1px 6px; border-radius: 4px; margin-top: 4px;
     background: rgba(93,202,165,0.2); color: #5DCAA5;
   }
+  .chat-debug {
+    background: rgba(255,255,255,0.04); border: 1px solid #2a2a2a;
+    border-radius: 8px; margin: 4px 0; padding: 8px 10px;
+    font-size: 11px; font-family: 'SF Mono', Menlo, monospace;
+    color: #888; word-break: break-all; white-space: pre-wrap;
+    max-height: 200px; overflow-y: auto;
+  }
+  .chat-debug summary {
+    cursor: pointer; color: #666; font-size: 10px;
+    text-transform: uppercase; letter-spacing: 0.5px;
+  }
+  .chat-debug summary:hover { color: #aaa; }
+  .chat-debug .dbg-key { color: #5DCAA5; }
+  .chat-debug .dbg-val { color: #ccc; }
+  .chat-debug .dbg-think {
+    color: #666; font-style: italic; border-left: 2px solid #333;
+    padding-left: 8px; margin: 4px 0;
+  }
 
   #chat-input-area {
     padding: 10px 12px; border-top: 1px solid #333;
@@ -505,7 +523,11 @@ async function sendChat() {
   const agentEl = addChatMsg('agent', '');
   agentEl.classList.add('streaming');
 
+  // Debug state for this request
   let fullText = '';
+  let thinkText = '';
+  let debugEvents = [];
+
   try {
     const res = await fetch('/api/chat', {
       method: 'POST',
@@ -530,6 +552,8 @@ async function sendChat() {
             fullText += d.content;
             agentEl.textContent = fullText;
             $chatMsgs.scrollTop = $chatMsgs.scrollHeight;
+          } else if (d.type === 'think') {
+            thinkText += d.content;
           } else if (d.type === 'done') {
             agentEl.textContent = d.message || fullText;
             agentEl.classList.remove('streaming');
@@ -543,6 +567,8 @@ async function sendChat() {
           } else if (d.type === 'error') {
             agentEl.textContent = '⚠ ' + d.content;
             agentEl.classList.remove('streaming');
+          } else if (d.type === 'debug') {
+            debugEvents.push(d);
           }
         } catch {}
       }
@@ -556,8 +582,48 @@ async function sendChat() {
     agentEl.textContent = '⚠ Connection error';
     agentEl.classList.remove('streaming');
   }
+
+  // Append debug details panel after the agent message
+  if (debugEvents.length > 0 || thinkText) {
+    const details = document.createElement('details');
+    details.className = 'chat-debug';
+    const summary = document.createElement('summary');
+    const respDbg = debugEvents.find(e => e.event === 'response');
+    const reqDbg = debugEvents.find(e => e.event === 'request');
+    summary.textContent = respDbg
+      ? `debug · ${respDbg.tokens} tokens · ${respDbg.total_ms}ms · ttft ${respDbg.ttft_ms}ms`
+      : 'debug';
+    details.appendChild(summary);
+
+    let html = '';
+    if (reqDbg) {
+      html += `<div><span class="dbg-key">model:</span> <span class="dbg-val">${reqDbg.model}</span></div>`;
+      html += `<div><span class="dbg-key">endpoint:</span> <span class="dbg-val">${reqDbg.endpoint}</span></div>`;
+      html += `<div><span class="dbg-key">system prompt:</span> <span class="dbg-val">${reqDbg.system_prompt_len} chars</span></div>`;
+      html += `<div><span class="dbg-key">user input:</span></div><div class="dbg-val">${escHtml(reqDbg.user_content)}</div>`;
+    }
+    if (thinkText) {
+      html += `<div style="margin-top:6px"><span class="dbg-key">thinking:</span></div><div class="dbg-think">${escHtml(thinkText)}</div>`;
+    }
+    if (respDbg) {
+      html += `<div style="margin-top:6px"><span class="dbg-key">raw output:</span></div><div class="dbg-val">${escHtml(respDbg.raw_output)}</div>`;
+      html += `<div><span class="dbg-key">parsed action:</span> <span class="dbg-val">${respDbg.parsed_action}</span></div>`;
+    }
+    const content = document.createElement('div');
+    content.innerHTML = html;
+    details.appendChild(content);
+    $chatMsgs.appendChild(details);
+    $chatMsgs.scrollTop = $chatMsgs.scrollHeight;
+  }
+
   chatBusy = false;
   $chatSend.disabled = false;
+}
+
+function escHtml(s) {
+  const d = document.createElement('div');
+  d.textContent = s || '';
+  return d.innerHTML;
 }
 
 $chatIn.addEventListener('keydown', e => {
