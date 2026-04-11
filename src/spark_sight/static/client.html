@@ -512,6 +512,38 @@ function addChatMsg(type, text) {
   return el;
 }
 
+// ── Think-block helpers (client-side stripping) ────────
+function stripThink(raw) {
+  // Remove <think>...</think> with proper tags
+  let t = raw.replace(/<think>[\s\S]*?<\/think>/g, '');
+  // Handle missing opening <think>: everything before </think> is thinking
+  if (t.includes('</think>')) t = t.split('</think>').pop();
+  return t.trim();
+}
+
+function extractThink(raw) {
+  // Extract thinking text for debug panel
+  const m = raw.match(/<think>([\s\S]*?)<\/think>/);
+  if (m) return m[1].trim();
+  if (raw.includes('</think>')) return raw.split('</think>')[0].replace(/<think>/g, '').trim();
+  // Fallback: everything before first { is thinking
+  const i = raw.indexOf('{');
+  if (i > 10) return raw.substring(0, i).trim();
+  return '';
+}
+
+// Return the visible (non-think) portion of the stream so far.
+// During streaming we show the "output" part live.
+function liveDisplay(raw) {
+  // If </think> appeared, show everything after it
+  if (raw.includes('</think>')) return raw.split('</think>').pop().trim();
+  // If we have a { but no </think>, assume think ended at first {
+  const i = raw.indexOf('{');
+  if (i >= 0) return raw.substring(i);
+  // Still in thinking phase — show nothing (cursor blinks)
+  return '';
+}
+
 async function sendChat() {
   const text = $chatIn.value.trim();
   if (!text || chatBusy) return;
@@ -523,9 +555,7 @@ async function sendChat() {
   const agentEl = addChatMsg('agent', '');
   agentEl.classList.add('streaming');
 
-  // Debug state for this request
   let fullText = '';
-  let thinkText = '';
   let debugEvents = [];
 
   try {
@@ -550,12 +580,13 @@ async function sendChat() {
           const d = JSON.parse(ln.slice(6));
           if (d.type === 'token') {
             fullText += d.content;
-            agentEl.textContent = fullText;
+            // Live display: show only the non-think portion
+            const visible = liveDisplay(fullText);
+            agentEl.textContent = visible;
             $chatMsgs.scrollTop = $chatMsgs.scrollHeight;
-          } else if (d.type === 'think') {
-            thinkText += d.content;
           } else if (d.type === 'done') {
-            agentEl.textContent = d.message || fullText;
+            // Final clean message from server-side parsing
+            agentEl.textContent = d.message || stripThink(fullText);
             agentEl.classList.remove('streaming');
             if (d.action && d.action !== 'answer') {
               const badge = document.createElement('div');
@@ -573,9 +604,8 @@ async function sendChat() {
         } catch {}
       }
     }
-    // Fallback if stream ended without a done event.
     if (agentEl.classList.contains('streaming')) {
-      agentEl.textContent = fullText || 'No response';
+      agentEl.textContent = stripThink(fullText) || 'No response';
       agentEl.classList.remove('streaming');
     }
   } catch {
@@ -583,7 +613,8 @@ async function sendChat() {
     agentEl.classList.remove('streaming');
   }
 
-  // Append debug details panel after the agent message
+  // Debug details panel
+  const thinkText = extractThink(fullText);
   if (debugEvents.length > 0 || thinkText) {
     const details = document.createElement('details');
     details.className = 'chat-debug';

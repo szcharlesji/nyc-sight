@@ -146,9 +146,13 @@ def create_app(
     # ── Streaming chat endpoint ──────────────────────────────────────
 
     def _strip_think(text: str) -> str:
-        """Remove ``<think>...</think>`` reasoning blocks."""
+        """Remove chain-of-thought reasoning blocks."""
         import re
-        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        # Handle missing opening <think> tag.
+        if "</think>" in text:
+            text = text.split("</think>", 1)[1].strip()
+        return text
 
     def _parse_planning_json(text: str) -> dict[str, Any]:
         """Best-effort parse of a Planning Agent JSON response."""
@@ -202,7 +206,6 @@ def create_app(
 
         async def event_stream():
             full_text = ""
-            in_think = False  # Track <think> block for streaming display
             t_start = time.time()
             client = AsyncOpenAI(
                 base_url=settings.nemotron.nim_url,
@@ -231,20 +234,12 @@ def create_app(
                         token_count += 1
                         if first_token_time is None:
                             first_token_time = time.time()
-
-                        # Track <think> blocks — don't show thinking tokens in chat
-                        if "<think>" in token:
-                            in_think = True
-                        if in_think:
-                            # Emit as debug-only token (hidden from chat bubble)
-                            yield f"data: {json.dumps({'type': 'think', 'content': token})}\n\n"
-                            if "</think>" in token:
-                                in_think = False
-                            continue
+                        # Stream every token — client-side JS handles
+                        # <think> stripping and display.
                         yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
 
                 t_end = time.time()
-                # Parse completed response.
+                # Parse completed response (strips <think> server-side for action execution).
                 parsed = _parse_planning_json(full_text)
                 yield f"data: {json.dumps({'type': 'done', **parsed})}\n\n"
 

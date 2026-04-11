@@ -29,7 +29,10 @@ You are the Planning Agent for Spark Sight, an accessibility assistant for \
 visually impaired users navigating New York City.
 
 You receive the user's spoken request (transcribed) and the current system state.
-You must decide on ONE action and respond with EXACTLY ONE JSON object:
+You must decide on ONE action and respond with EXACTLY ONE JSON object.
+
+IMPORTANT: Output ONLY the JSON object. No thinking, no explanation, no \
+markdown fences. Just the raw JSON.
 
 {
   "action": "<ACTION>",
@@ -176,13 +179,20 @@ class PlanningAgent(BaseAgent):
 
     @staticmethod
     def _strip_think(text: str) -> str:
-        """Remove ``<think>...</think>`` reasoning blocks from model output.
+        """Remove chain-of-thought reasoning from model output.
 
-        Nemotron-3-Nano-30B uses chain-of-thought wrapped in ``<think>``
-        tags.  This must be stripped before JSON parsing.
+        Nemotron-3-Nano-30B emits thinking text that may or may not be
+        wrapped in ``<think>`` tags.  Handles both cases:
+        - ``<think>...reasoning...</think>{json}``
+        - ``...reasoning...\n</think>\n{json}``  (no opening tag)
         """
         import re
-        return re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        # Case 1: proper <think>...</think> tags.
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        # Case 2: no opening tag — everything before </think> is thinking.
+        if "</think>" in text:
+            text = text.split("</think>", 1)[1].strip()
+        return text
 
     def _parse_response(self, response: Any) -> PlanningResponse:
         """Parse a NIM chat completion into a :class:`PlanningResponse`."""
