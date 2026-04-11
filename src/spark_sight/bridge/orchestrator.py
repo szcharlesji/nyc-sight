@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Awaitable, Callable
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
@@ -36,6 +37,11 @@ class SpeechPriority(StrEnum):
     PLANNING = "planning"  # queues behind ambient
 
 
+# Callback type aliases for external consumers (e.g. the server layer).
+SpeechCallback = Callable[[SpeechPriority, str], Awaitable[None]]
+StatusCallback = Callable[[str, str | None, str, str | None], Awaitable[None]]
+
+
 class Orchestrator:
     """Wires agents together and mediates all communication.
 
@@ -59,10 +65,17 @@ class Orchestrator:
         prompt_state: PromptState,
         ambient_agent: BaseAgent | None = None,
         planning_agent: BaseAgent | None = None,
+        *,
+        on_speech: SpeechCallback | None = None,
+        on_status: StatusCallback | None = None,
     ) -> None:
         self.state = prompt_state
         self.ambient_agent = ambient_agent
         self.planning_agent = planning_agent
+
+        # External callbacks (registered by the server layer).
+        self._on_speech = on_speech
+        self._on_status = on_status
 
         # Speech queue: list of (priority, text) — drained by TTS consumer.
         self._speech_queue: asyncio.Queue[tuple[SpeechPriority, str]] = asyncio.Queue()
@@ -87,19 +100,23 @@ class Orchestrator:
 
             case AmbientSignal.WARNING:
                 await self._enqueue_speech(SpeechPriority.WARNING, response.message)
+                await self._emit_status(response)
 
             case AmbientSignal.PROGRESS | AmbientSignal.CORRECTION:
                 await self._enqueue_speech(SpeechPriority.AMBIENT, response.message)
+                await self._emit_status(response)
 
             case AmbientSignal.GOAL_REACHED:
                 await self._enqueue_speech(SpeechPriority.AMBIENT, response.message)
                 self.state.reset_goal()
                 logger.info("Goal reached — reverted to patrol")
+                await self._emit_status(response)
 
             case AmbientSignal.FAILURE:
                 await self._enqueue_speech(SpeechPriority.AMBIENT, response.message)
                 self.state.reset_goal()
                 logger.warning("Ambient FAILURE: %s", response.message)
+                await self._emit_status(response)
                 # Trigger replan on the Planning Agent.
                 await self._trigger_replan(response.message)
 
@@ -154,11 +171,13 @@ class Orchestrator:
     # ------------------------------------------------------------------
 
     async def _enqueue_speech(self, priority: SpeechPriority, text: str) -> None:
-        """Add a message to the speech output queue."""
+        """Add a message to the speech output queue and notify callbacks."""
         if not text:
             return
         await self._speech_queue.put((priority, text))
         logger.debug("Speech enqueued [%s]: %s", priority, text[:80])
+        if self._on_speech:
+            await self._on_speech(priority, text)
 
     async def next_speech(self) -> tuple[SpeechPriority, str]:
         """Consume the next speech item (blocks until available).
@@ -175,6 +194,18 @@ class Orchestrator:
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
+
+    async def _emit_status(self, response: AmbientResponse) -> None:
+        """Push a status update to the registered callback (if any)."""
+        if self._on_status is None:
+            return
+        snap = self.state.get_snapshot()
+        await self._on_status(
+            response.signal,
+            response.message or None,
+            snap.mode,
+            snap.active_goal,
+        )
 
     async def _trigger_replan(self, failure_reason: str) -> None:
         """Ask the Planning Agent to generate a new plan after a FAILURE."""

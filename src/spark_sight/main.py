@@ -1,18 +1,22 @@
 """Spark Sight — main entry point.
 
-Wires up the Orchestrator, Ambient Agent, and Planning Agent, then runs
-the main event loop.  Currently a minimal scaffold for testing the bridge.
+Wires up the Orchestrator, Ambient and Planning agents, the FrameBuffer,
+and the FastAPI server, then starts uvicorn.
 """
 
 from __future__ import annotations
 
-import asyncio
+import argparse
 import logging
+
+import uvicorn
 
 from spark_sight.agents.ambient import AmbientAgent
 from spark_sight.agents.planning import PlanningAgent
 from spark_sight.bridge.orchestrator import Orchestrator
 from spark_sight.bridge.prompt_state import PromptState
+from spark_sight.server.app import create_app
+from spark_sight.server.frame_buffer import FrameBuffer
 
 logging.basicConfig(
     level=logging.INFO,
@@ -21,37 +25,68 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def main() -> None:
+def build_app(*, debug: bool = False):
+    """Construct all components and return the FastAPI app."""
     # Shared state
     state = PromptState()
+    frame_buffer = FrameBuffer()
 
     # Agents
     ambient = AmbientAgent(state)
     planning = PlanningAgent(state)
 
-    # Orchestrator
-    _orchestrator = Orchestrator(state, ambient_agent=ambient, planning_agent=planning)
+    # Server (creates its own queues)
+    app = create_app(frame_buffer, debug=debug)
 
-    # Lifecycle
-    await ambient.start()
-    await planning.start()
-    logger.info("Spark Sight started — bridge active, agents in stub mode")
+    # Orchestrator — wired to server callbacks for push notifications.
+    orchestrator = Orchestrator(
+        state,
+        ambient_agent=ambient,
+        planning_agent=planning,
+        on_speech=None,  # TTS not yet wired
+        on_status=app.state.push_status,
+    )
 
-    try:
-        # TODO: Replace with real event loop that:
-        #   1. Pulls camera frames → Ambient Agent → Orchestrator
-        #   2. Listens for ASR transcripts → Planning Agent → Orchestrator
-        #   3. Drains speech queue → Magpie TTS → audio output
-        #
-        # For now, just keep alive so tests and manual poking work.
-        await asyncio.Event().wait()
-    except asyncio.CancelledError:
-        pass
-    finally:
+    # Store references on app.state so lifespan events or tests can access them.
+    app.state.orchestrator = orchestrator
+    app.state.ambient_agent = ambient
+    app.state.planning_agent = planning
+    app.state.prompt_state = state
+
+    @app.on_event("startup")
+    async def startup() -> None:
+        await ambient.start()
+        await planning.start()
+        logger.info("Spark Sight started — agents in stub mode, server ready")
+
+    @app.on_event("shutdown")
+    async def shutdown() -> None:
         await ambient.stop()
         await planning.stop()
         logger.info("Spark Sight shut down")
 
+    return app
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Spark Sight server")
+    parser.add_argument("--host", default="0.0.0.0", help="Bind address")
+    parser.add_argument("--port", type=int, default=8000, help="Bind port")
+    parser.add_argument("--debug", action="store_true", help="Enable debug mode")
+    parser.add_argument("--ssl-keyfile", default=None, help="SSL key file (for Safari camera access)")
+    parser.add_argument("--ssl-certfile", default=None, help="SSL cert file")
+    args = parser.parse_args()
+
+    app = build_app(debug=args.debug)
+
+    uvicorn.run(
+        app,
+        host=args.host,
+        port=args.port,
+        ssl_keyfile=args.ssl_keyfile,
+        ssl_certfile=args.ssl_certfile,
+    )
+
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
