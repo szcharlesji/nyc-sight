@@ -166,6 +166,23 @@
     background: rgba(239,159,39,0.12); color: #EF9F27;
     font-size: 12px; border: 1px solid rgba(239,159,39,0.25);
   }
+  .chat-msg.ambient {
+    align-self: flex-start;
+    background: rgba(133,183,235,0.12); color: #85B7EB;
+    font-size: 12px; border: 1px solid rgba(133,183,235,0.25);
+  }
+  .chat-msg.ambient.warning {
+    background: rgba(239,159,39,0.12); color: #EF9F27;
+    border-color: rgba(239,159,39,0.3);
+  }
+  .chat-msg.ambient.failure {
+    background: rgba(240,149,149,0.12); color: #F09595;
+    border-color: rgba(240,149,149,0.3);
+  }
+  .chat-msg.ambient.goal-reached {
+    background: rgba(93,202,165,0.12); color: #5DCAA5;
+    border-color: rgba(93,202,165,0.3);
+  }
   .chat-action-badge {
     display: inline-block; font-size: 10px; font-weight: 600;
     padding: 1px 6px; border-radius: 4px; margin-top: 4px;
@@ -209,6 +226,25 @@
     flex-shrink: 0;
   }
   #chat-send:disabled { opacity: 0.4; cursor: default; }
+
+  /* Voice mode toolbar */
+  #voice-toolbar {
+    padding: 6px 12px; border-top: 1px solid #333;
+    display: flex; gap: 6px; align-items: center;
+    flex-shrink: 0; font-size: 12px; color: #888;
+  }
+  .voice-btn {
+    background: #2a2a2a; border: 1px solid #444; color: #aaa;
+    padding: 4px 10px; border-radius: 6px; font-size: 11px;
+    cursor: pointer; display: flex; align-items: center; gap: 4px;
+    transition: all 0.15s;
+  }
+  .voice-btn.active { background: #5DCAA5; color: #000; border-color: #5DCAA5; }
+  .voice-btn .dot {
+    width: 6px; height: 6px; border-radius: 50%;
+    background: #666;
+  }
+  .voice-btn.active .dot { background: #000; }
 </style>
 </head>
 <body>
@@ -241,6 +277,11 @@
     <button id="chat-close">×</button>
   </div>
   <div id="chat-messages"></div>
+  <div id="voice-toolbar">
+    <button id="tts-toggle" class="voice-btn active"><span class="dot"></span>TTS</button>
+    <button id="stt-toggle" class="voice-btn active"><span class="dot"></span>STT</button>
+    <span id="voice-status" style="margin-left:auto;font-size:10px"></span>
+  </div>
   <div id="chat-input-area">
     <input id="chat-input" type="text" placeholder="Type a message…" autocomplete="off">
     <button id="chat-send">↑</button>
@@ -270,6 +311,10 @@ let audioCtx = null;
 let mediaStream = null;
 let frameInterval = null;
 let stats = { frames: 0, audio: 0, msgsIn: 0, fpsTicks: [] };
+let ttsEnabled = true;
+let sttEnabled = true;
+let micProcessor = null;
+let micSource = null;
 
 // ── DOM refs ───────────────────────────────────────────
 const $mode    = document.getElementById('mode');
@@ -402,11 +447,12 @@ function stopFrameCapture() {
 
 // ── Mic audio streaming ────────────────────────────────
 function startMicCapture() {
-  const source = audioCtx.createMediaStreamSource(mediaStream);
-  const processor = audioCtx.createScriptProcessor(4096, 1, 1);
+  micSource = audioCtx.createMediaStreamSource(mediaStream);
+  micProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
 
-  processor.onaudioprocess = (e) => {
+  micProcessor.onaudioprocess = (e) => {
     if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (!sttEnabled) return; // STT off — don't send audio
 
     const f32 = e.inputBuffer.getChannelData(0);
     const pcm = new Int16Array(f32.length);
@@ -425,12 +471,13 @@ function startMicCapture() {
     $dbgAu.textContent = stats.audio;
   };
 
-  source.connect(processor);
-  processor.connect(audioCtx.destination);
+  micSource.connect(micProcessor);
+  micProcessor.connect(audioCtx.destination);
 }
 
-// ── TTS playback ───────────────────────────────────────
+// ── TTS playback ─────────────────────────────────────
 async function playTTS(wavBuffer) {
+  if (!ttsEnabled) return; // TTS off — skip playback
   if (audioCtx.state === 'suspended') await audioCtx.resume();
   try {
     const buf = await audioCtx.decodeAudioData(wavBuffer.slice(0));
@@ -454,6 +501,14 @@ const SIG_CLASS = {
   FAILURE:      'sig-failure',
 };
 
+const SIG_EMOJI = {
+  WARNING: '⚠️', PROGRESS: '➡️', CORRECTION: '↩️',
+  GOAL_REACHED: '✅', FAILURE: '❌',
+};
+const SIG_CSS_MOD = {
+  WARNING: 'warning', FAILURE: 'failure', GOAL_REACHED: 'goal-reached',
+};
+
 function handleStatus(s) {
   if (s.type === 'status') {
     $mode.textContent = s.mode === 'goal'
@@ -465,15 +520,19 @@ function handleStatus(s) {
       $signal.className = '';
       if (s.message) $message.textContent = s.message;
       appendDebugLog('ASR: ' + (s.message || ''));
-      // Mirror ASR transcript into chat window.
       addChatMsg('asr', '🎙 ' + (s.message || ''));
     } else if (s.signal && s.signal !== 'CLEAR') {
       $signal.className = SIG_CLASS[s.signal] || '';
       $signal.textContent = s.signal;
       if (s.message) $message.textContent = s.message;
       appendDebugLog(s.signal + (s.message ? ': ' + s.message : ''));
-      // Mirror agent signals into chat window.
-      if (s.message) addChatMsg('tts', '🔊 ' + s.message);
+      // Ambient agent signals → chat as distinct ambient messages
+      if (s.message) {
+        const emoji = SIG_EMOJI[s.signal] || '👁';
+        const el = addChatMsg('ambient', `${emoji} [${s.signal}] ${s.message}`);
+        const mod = SIG_CSS_MOD[s.signal];
+        if (mod) el.classList.add(mod);
+      }
     }
   } else if (s.type === 'speech') {
     $message.textContent = s.text;
@@ -661,6 +720,35 @@ $chatIn.addEventListener('keydown', e => {
   if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
 });
 $chatSend.addEventListener('click', sendChat);
+
+// ── Voice mode toggles ─────────────────────────────────
+const $ttsBtn = document.getElementById('tts-toggle');
+const $sttBtn = document.getElementById('stt-toggle');
+const $voiceStatus = document.getElementById('voice-status');
+
+function updateVoiceStatus() {
+  const parts = [];
+  if (sttEnabled) parts.push('listening');
+  if (ttsEnabled) parts.push('speaking');
+  $voiceStatus.textContent = parts.length ? parts.join(' + ') : 'voice off';
+  $mic.classList.toggle('muted', !sttEnabled);
+}
+
+$ttsBtn.addEventListener('click', () => {
+  ttsEnabled = !ttsEnabled;
+  $ttsBtn.classList.toggle('active', ttsEnabled);
+  updateVoiceStatus();
+  addChatMsg('system', ttsEnabled ? 'TTS enabled' : 'TTS disabled');
+});
+
+$sttBtn.addEventListener('click', () => {
+  sttEnabled = !sttEnabled;
+  $sttBtn.classList.toggle('active', sttEnabled);
+  updateVoiceStatus();
+  addChatMsg('system', sttEnabled ? 'STT enabled — listening' : 'STT disabled');
+});
+
+updateVoiceStatus();
 
 // ── Debug helpers ────────────────────────────────────────
 function appendDebugLog(line) {
