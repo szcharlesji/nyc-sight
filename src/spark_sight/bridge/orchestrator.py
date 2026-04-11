@@ -99,7 +99,7 @@ class Orchestrator:
         """Process a signal emitted by the Ambient Agent.
 
         Routing rules:
-        - CLEAR → do nothing.
+        - CLEAR → emit status (for frame counter) but no speech.
         - WARNING → enqueue speech at highest priority.
         - PROGRESS / CORRECTION → enqueue speech at ambient priority.
         - GOAL_REACHED → speak confirmation, reset prompt state to patrol.
@@ -107,6 +107,7 @@ class Orchestrator:
         """
         match response.signal:
             case AmbientSignal.CLEAR:
+                await self._emit_status(response)
                 return
 
             case AmbientSignal.WARNING:
@@ -119,15 +120,17 @@ class Orchestrator:
 
             case AmbientSignal.GOAL_REACHED:
                 await self._enqueue_speech(SpeechPriority.AMBIENT, response.message)
+                # Emit status BEFORE resetting so the client sees the completed goal.
+                await self._emit_status(response)
                 self.state.reset_goal()
                 logger.info("Goal reached — reverted to patrol")
-                await self._emit_status(response)
 
             case AmbientSignal.FAILURE:
                 await self._enqueue_speech(SpeechPriority.AMBIENT, response.message)
+                # Emit status BEFORE resetting so the client sees the failed goal.
+                await self._emit_status(response)
                 self.state.reset_goal()
                 logger.warning("Ambient FAILURE: %s", response.message)
-                await self._emit_status(response)
                 # Trigger replan on the Planning Agent.
                 await self._trigger_replan(response.message)
 
