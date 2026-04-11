@@ -272,7 +272,6 @@ class TestAmbientLoop:
     async def test_loop_survives_agent_exception(self) -> None:
         state = PromptState()
         buf = FrameBuffer()
-        buf.push(b"frame_data")
 
         call_count = 0
 
@@ -288,13 +287,17 @@ class TestAmbientLoop:
 
         orch = Orchestrator(state, ambient_agent=mock_agent, frame_buffer=buf)
 
+        # Push distinct frames so the loop processes each one (it skips duplicates).
+        buf.push(b"frame_1")
         loop_task = asyncio.create_task(orch.run_ambient_loop())
+        await asyncio.sleep(0.02)
+        buf.push(b"frame_2")  # new frame after the first error
         await asyncio.sleep(0.05)
         loop_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await loop_task
 
-        # Should have recovered from the first error and kept going.
+        # Should have recovered from the first error and processed the second frame.
         assert call_count >= 2
 
     @pytest.mark.asyncio

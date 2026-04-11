@@ -46,27 +46,30 @@ Safety warnings (`WARNING`) always fire regardless of mode.
 ## Configuration
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `nim_base_url` | `http://localhost:8000/v1` | Cosmos Reason2 NIM endpoint |
-| `model` | `nvidia/cosmos-reason2-8b` | Model identifier |
+| `nim_base_url` | from `COSMOS_NIM_URL` env | Cosmos Reason2 NIM endpoint |
+| `model` | from `COSMOS_MODEL` env (`nvidia/cosmos-reason2-8b`) | Model identifier |
 
 ## Status
 
 ### Built
 - [x] Agent class implementing `BaseAgent` interface
 - [x] `start()` / `stop()` lifecycle with async OpenAI client
-- [x] `process()` method with input parsing and stub response
-- [x] NIM inference call structure (commented placeholder)
-- [x] Integration with shared `PromptState` (reads compiled prompt)
+- [x] `process()` method with NIM inference via OpenAI-compatible API
+- [x] Live NIM inference against Cosmos Reason2-8B endpoint (configured via `.env`)
+- [x] `_parse_response()` — parses structured JSON, strips markdown fences, graceful fallback to CLEAR
+- [x] Integration with shared `PromptState` (reads compiled prompt each frame)
 - [x] `FrameBuffer` ring buffer — thread-safe, stores last 30 JPEG frames with timestamps
 - [x] `FrameBuffer.latest_base64()` — returns frame in the format `process()` expects
 - [x] iPhone → WebSocket → FrameBuffer pipeline (frames arrive via `server/app.py`)
 - [x] Orchestrator status callbacks — ambient signals push to iPhone HUD in real time
+- [x] Continuous loop runner — `Orchestrator.run_ambient_loop()` pulls frames at ~2-4 FPS
+- [x] One-shot inspect mode — `inspect()` method handles visual queries from Planning Agent
 
 ### TODO
-- [ ] Wire NIM inference — uncomment and test against live Cosmos Reason2 container
-- [ ] Response parsing — parse model output into `AmbientResponse` structured format
+- [x] ~~Wire NIM inference~~ — live against Cosmos Reason2-8B
+- [x] ~~Response parsing~~ — `_parse_response()` with JSON + markdown fence handling
+- [x] ~~Continuous loop runner~~ — `Orchestrator.run_ambient_loop()`
+- [x] ~~One-shot inspect mode~~ — `AmbientAgent.inspect()`
 - [ ] Frame preprocessing — resize/encode frames for optimal VLM input
-- [ ] Continuous loop runner — async loop that pulls frames from ring buffer at ~2-4 FPS
-- [ ] One-shot inspect mode — handle `inspect` queries from Planning Agent
 - [ ] Safety classifier — ensure WARNING signals are never suppressed
 - [ ] Performance tuning — optimize inference latency on GB10

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -16,12 +17,13 @@ from openai import AsyncOpenAI
 from spark_sight.agents.base import BaseAgent
 from spark_sight.bridge.models import AmbientResponse, AmbientSignal
 from spark_sight.bridge.prompt_state import PromptState
+from spark_sight.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Default NIM endpoint for Cosmos Reason2 running locally on the GB10.
-_DEFAULT_NIM_BASE_URL = "http://localhost:8000/v1"
-_DEFAULT_MODEL = "nvidia/cosmos-reason2-8b"
+_settings = get_settings()
+_DEFAULT_NIM_BASE_URL = _settings.cosmos.nim_url
+_DEFAULT_MODEL = _settings.cosmos.model
 
 # ---------------------------------------------------------------------------
 # System prompts
@@ -32,36 +34,37 @@ You are the Ambient Agent for Spark Sight, an accessibility assistant for \
 visually impaired users navigating New York City. You are their eyes.
 
 You receive one camera frame (from a chest-mounted iPhone) and a goal prompt. \
-Evaluate the scene and respond with EXACTLY ONE JSON object:
+Evaluate the scene and respond with EXACTLY ONE JSON object.
 
-{
-  "signal": "<SIGNAL>",
-  "message": "<text to speak to the user, or empty string>",
-  "reasoning": "<brief internal reasoning, not spoken>"
-}
+IMPORTANT: Output ONLY the JSON object. No thinking, no explanation, no \
+markdown fences. Just the raw JSON.
+
+{"signal": "<SIGNAL>", "message": "<text or empty string>", "reasoning": "<brief>"}
 
 SIGNAL must be one of:
-- CLEAR: nothing to report. message MUST be "".
-- WARNING: immediate safety hazard or important information. message MUST \
-describe the danger concisely.
-- PROGRESS: meaningful progress toward the active goal (only when an ACTIVE \
-GOAL is present). message describes the progress.
-- CORRECTION: user needs to adjust course (only when an ACTIVE GOAL is \
-present). message gives the correction.
-- GOAL_REACHED: the active goal has been achieved (only when an ACTIVE GOAL \
-is present). message confirms arrival.
-- FAILURE: the goal cannot be achieved (only when an ACTIVE GOAL is present). \
+- CLEAR: nothing to report. message MUST be "". Use this most of the time.
+- WARNING: immediate safety hazard (cyclist, obstacle, construction). \
+message describes the danger. Always fires regardless of mode.
+- GOAL_REACHED: the ACTIVE GOAL condition is satisfied IN THIS FRAME. \
+If the goal says "notify when you see X" and you see X → GOAL_REACHED. \
+If the goal says "guide to location" and user arrived → GOAL_REACHED. \
+message confirms what was found/achieved.
+- PROGRESS: meaningful step toward the goal but NOT yet achieved. \
+Use sparingly — only for significant milestones (e.g. "subway sign \
+visible 50 feet ahead").
+- CORRECTION: user needs to change direction to reach the goal.
+- FAILURE: the goal CANNOT be achieved (path fully blocked, target gone). \
 message explains why.
 
 Rules:
 1. When there is NO "ACTIVE GOAL" section below, only emit CLEAR or WARNING.
-2. When there IS an "ACTIVE GOAL", you may emit any signal.
-3. Safety warnings (WARNING) ALWAYS fire regardless of mode. A fast-approaching \
-cyclist, an open manhole, construction hazard — these override everything.
-4. Prefer CLEAR. Only speak when there is actionable information. The user is \
-walking and does not want constant narration.
+2. When there IS an "ACTIVE GOAL", check if the goal condition is MET in this \
+frame. If yes → GOAL_REACHED immediately. Do not use PROGRESS or CORRECTION \
+if the goal is already satisfied.
+3. Safety warnings (WARNING) ALWAYS fire regardless of mode.
+4. Prefer CLEAR. Only speak when there is actionable information.
 5. Messages must be concise (1-2 sentences), spoken aloud to a blind person. \
-No visual references like "the red sign" — describe position and content.
+Describe position and content, not colors.
 6. Output valid JSON only. No markdown, no explanation outside the JSON.
 """
 
@@ -157,6 +160,9 @@ class AmbientAgent(BaseAgent):
                 _SYSTEM_PROMPT + f"\n\n--- GOAL PROMPT ---\n{compiled}"
             )
 
+        mode = "inspect" if prompt_override else "ambient"
+        logger.debug("[Cosmos] %s call (frame=%d bytes)", mode, len(frame_b64))
+
         try:
             response = await self._client.chat.completions.create(
                 model=self._model,
@@ -179,7 +185,7 @@ class AmbientAgent(BaseAgent):
             )
             return self._parse_response(response)
         except Exception:
-            logger.exception("NIM inference failed")
+            logger.exception("[Cosmos] NIM inference failed")
             return AmbientResponse(signal=AmbientSignal.CLEAR)
 
     async def inspect(self, frame_base64: str, prompt: str) -> AmbientResponse:
@@ -201,10 +207,20 @@ class AmbientAgent(BaseAgent):
     # Internal helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _strip_think(text: str) -> str:
+        """Remove chain-of-thought ``<think>`` blocks from Cosmos output."""
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        if "</think>" in text:
+            text = text.split("</think>", 1)[1].strip()
+        return text
+
     def _parse_response(self, response: Any) -> AmbientResponse:
         """Parse a NIM chat completion into an :class:`AmbientResponse`."""
         raw: str = response.choices[0].message.content or ""
-        raw = raw.strip()
+        logger.debug("[Cosmos raw] %s", raw[:300])
+
+        raw = self._strip_think(raw)
 
         # VLMs sometimes wrap JSON in markdown code fences.
         if raw.startswith("```"):
@@ -213,11 +229,16 @@ class AmbientAgent(BaseAgent):
         try:
             data = json.loads(raw)
             signal = AmbientSignal(data.get("signal", "CLEAR"))
-            return AmbientResponse(
+            result = AmbientResponse(
                 signal=signal,
                 message=data.get("message", ""),
                 reasoning=data.get("reasoning", ""),
             )
+            if signal != AmbientSignal.CLEAR:
+                logger.info(
+                    "[Cosmos] %s: %s", signal, result.message[:100]
+                )
+            return result
         except (json.JSONDecodeError, ValueError, KeyError):
-            logger.warning("Failed to parse Ambient response: %s", raw[:200])
+            logger.warning("[Cosmos] Failed to parse: %s", raw[:300])
             return AmbientResponse(signal=AmbientSignal.CLEAR)

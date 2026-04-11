@@ -1,13 +1,13 @@
-# Planning Agent — Nemotron Super 120B
+# Planning Agent — Nemotron-3-Nano-30B
 
 ## Role
 The system's **brain**. Sits idle until activated by user voice or an Ambient Agent `FAILURE` signal. Interprets natural language, queries NYC Open Data, reasons about routes, and programs the Ambient Agent's active goal.
 
 ## Model
-- **Nemotron Super 120B** — NVIDIA's open-source agentic LLM
+- **Nemotron-3-Nano-30B** — NVIDIA's efficient agentic LLM
 - Optimized for intent parsing, structured output, and tool calling
 - No vision capabilities — all visual tasks delegated to Ambient Agent
-- Local NIM endpoint: `http://localhost:8001/v1`
+- NIM endpoint configured via `NEMOTRON_NIM_URL` env var (default: `http://localhost:8005/v1`)
 
 ## Input
 Each `process()` call receives one of:
@@ -52,8 +52,8 @@ Returns a `PlanningResponse`:
 ## Configuration
 | Parameter | Default | Description |
 |-----------|---------|-------------|
-| `nim_base_url` | `http://localhost:8001/v1` | Nemotron Super NIM endpoint |
-| `model` | `nvidia/nemotron-super-120b` | Model identifier |
+| `nim_base_url` | from `NEMOTRON_NIM_URL` env | Nemotron NIM endpoint |
+| `model` | from `NEMOTRON_MODEL` env (`nemotron-nano`) | Model identifier |
 
 ## Status
 
@@ -61,16 +61,17 @@ Returns a `PlanningResponse`:
 - [x] Agent class implementing `BaseAgent` interface
 - [x] `start()` / `stop()` lifecycle with async OpenAI client
 - [x] `process()` method with transcript/failure input parsing
-- [x] System prompt with tool definitions and output schema
-- [x] NIM inference call structure (commented placeholder)
+- [x] System prompt with structured JSON output schema
+- [x] Live NIM inference via OpenAI-compatible API (Nemotron-3-Nano-30B)
+- [x] `_parse_response()` — parses model JSON into `PlanningResponse`, strips markdown fences
 - [x] Integration with shared `PromptState` (reads snapshot for context)
-- [x] Stub responses for testing without NIM
+- [x] Graceful degradation: falls back to stub if NIM client is None, to raw text if JSON parse fails
 - [x] Mic audio → WebSocket → `audio_queue` pipeline (PCM chunks arrive via `server/app.py`)
 - [x] Orchestrator status callbacks — planning responses push to iPhone HUD
 
 ### TODO
-- [ ] Wire NIM inference — uncomment and test against live Nemotron Super container
-- [ ] Response parsing — parse model JSON output into `PlanningResponse`
+- [x] ~~Wire NIM inference~~ — live against Nemotron-3-Nano-30B
+- [x] ~~Response parsing~~ — `_parse_response()` with JSON + markdown fence handling
 - [ ] Tool execution — implement `nyc_accessibility_lookup` with SQLite spatial queries
 - [ ] Tool execution — implement `set_ambient_goal` / `reset_ambient_goal` via Orchestrator
 - [ ] Tool execution — implement `web_search` (optional, WiFi-dependent)
