@@ -1,12 +1,22 @@
-
-## Case 1: "Take Me Home" — Personalized Route Safety Check
-
+## Case 1: "Can I Get In?" — Real-Time Station Accessibility Check
 
 ### Problem
 
-For blind pedestrians, crossing intersections is the highest-risk moment of any journey. Audio pedestrian signals are the primary safety mechanism — but they can be disrupted by construction without warning, and no existing navigation tool tracks this in real time.
+For blind and low-vision pedestrians, arriving at a subway station only to find the elevator is broken is more than an inconvenience — it can strand them entirely. MTA's official elevator status page is often minutes behind reality. And even when the data is correct, it doesn't answer the actual question: **is *this* station, *right now*, actually accessible through any of its entrances?**
 
-Standard apps like Google Maps treat all users the same. They optimize for speed, not for whether every crossing on the route has a functioning audio signal. They don't know your specific route. They don't know which intersections you depend on every day.
+No existing app cross-references elevator outage data with 311 complaint logs to answer that compound question. They report status fields — they don't reason about what those fields mean together.
+
+---
+
+### Why This Requires Reasoning, Not Just Lookup
+
+A single data source cannot answer "can I get in?" reliably:
+
+- **MTA elevator data** tells you the official status — but lags reality by minutes or hours
+- **311 complaint data** is crowdsourced and timely — but unstructured and sometimes refers to the same entrance by different names
+- **Station ADA structure data** tells you how many accessible entrances exist — but not which are currently operational
+
+The Planning Agent must **synthesize across all three**, resolve naming ambiguities, and reason about what a partial outage actually means for access. The conclusion cannot be read from any single table — it has to be *derived*.
 
 ---
 
@@ -14,104 +24,149 @@ Standard apps like Google Maps treat all users the same. They optimize for speed
 
 > *This assumption is what makes the solution viable — and it's grounded in reality.*
 
-Blind pedestrians overwhelmingly rely on a **small set of memorized routes** built up over time. Each route is learned through repetition: the number of steps to the first curb cut, which corner has the audio signal, which block to avoid. Deviation is costly and stressful.
+Blind pedestrians frequently need to make a binary decision at a station entrance: **go in, or reroute**. This decision must be made before committing to stairs, turnstiles, or a platform with no way back up.
 
-This means:
-- The set of intersections that matter to any individual user is **small and known in advance**
-- The risk isn't "finding a route" — it's **validating that today's conditions on a familiar route are still safe**
-- A system that monitors those specific intersections proactively is orders of magnitude more useful than a general-purpose navigation app
+The user doesn't need navigation. They need **ground truth about a specific place, right now** — delivered before they take the next step.
 
 ---
 
-### Showed Approach
+### Demonstrated Approach
 
-**Scene:** User is about to leave work and head home. A route they walk every day.
+**Scene:** User is standing outside a subway station. Cosmos reads the station signage. User asks a single question.
 
 ---
 
-**Step 1 — Voice Input**
+**Step 1 — Visual Recognition + Voice Input**
 
-> User says: *"Take me home."*
+Cosmos (Ambient Agent, Patrol Mode) reads station signage visible in frame:
+
+```
+Signal: PROGRESS
+Cosmos: "Jay Street-MetroTech station detected. A, C, F lines."
+```
+
+> User says: *"Can I get into this station?"*
 
 Parakeet ASR transcribes. Planning Agent wakes up.
 
+**Planning Agent initial reasoning:**
+> *"User wants to know if this station is accessible right now. Station identity is known from Cosmos — no GPS needed. I need to check elevator status. But elevator status alone isn't enough: I need to know how many accessible entrances this station has, and whether the outage affects all of them or just one."*
+
 ---
 
-**Step 2 — Memory Retrieval** *(Tool Call 1)*
+**Step 2 — Check Official Elevator Status** *(Tool Call 1)*
 
 ```
-tool: query_user_memory
-input: "home route"
+tool: mta_elevator_status
+input: station_name: "Jay St-MetroTech"
 
 output: {
-  "route_name": "home",
-  "description": "South on Broadway from W86th to W72nd, 
-                  cross Broadway at W72nd St heading east,
-                  then south on Amsterdam Ave to W68th",
-  "key_intersections": [
-    "Broadway & W79th St",
-    "Broadway & W72nd St",   ← primary crossing
-    "Amsterdam Ave & W68th St"
-  ],
-  "notes": "User prefers north entrance of 72nd St station 
-             as landmark. Usually crosses at W72nd."
+  "station": "Jay St-MetroTech",
+  "elevators": [
+    {
+      "entrance": "A/C/F — Jay Street entrance",
+      "status": "OUT OF SERVICE",
+      "reason": "Maintenance",
+      "since": "06:14 AM"
+    },
+    {
+      "entrance": "A/C — Court Street entrance",
+      "status": "UNKNOWN",
+      "last_updated": "11:47 PM (yesterday)"
+    }
+  ]
 }
 ```
 
-Planning Agent now knows exactly which intersections to check.
+**Planning Agent reasoning after Tool Call 1:**
+> *"The Jay Street entrance elevator is confirmed out. The Court Street entrance shows UNKNOWN — the data hasn't been updated since last night. That's a data gap, not a confirmation of working. I can't tell the user 'Court Street is fine' based on stale data. 311 complaints may have more recent signal."*
+
+→ **Decides to query 311, not skip it.**
 
 ---
 
-**Step 3 — Intersection Safety Check** *(Tool Calls 2–4)*
+**Step 3 — Check 311 Recent Complaints** *(Tool Call 2)*
 
 ```
-tool: nyc_accessibility_lookup
-input: "Broadway & W79th St"
-output: audio_signal ✅  |  construction ✅ none  |  311 complaints ✅ none
-→ CLEAR
+tool: nyc_311_lookup
+input: {
+  location: "Jay St-MetroTech",
+  category: "elevator",
+  within_hours: 12
+}
+
+output: {
+  "complaints": [
+    {
+      "submitted": "08:22 AM today",
+      "description": "Elevator broken at Court Street entrance, 
+                       couldn't get my wheelchair through",
+      "status": "Open"
+    },
+    {
+      "submitted": "07:55 AM today", 
+      "description": "Both elevators at Jay St station out, 
+                       no staff to help",
+      "status": "Open"
+    }
+  ]
+}
 ```
 
-```
-tool: nyc_accessibility_lookup
-input: "Broadway & W72nd St"
-output: audio_signal ✅  |  construction ⚠️ ACTIVE  |  permit_type: "street closure"
-→ FLAG
-```
+**Planning Agent reasoning after Tool Call 2:**
+> *"Two complaints this morning — both filed after 6 AM, both still open. The 7:55 AM complaint says 'both elevators out.' The 8:22 AM complaint specifically names the Court Street entrance. This crowdsourced data is more recent than MTA's own records. The UNKNOWN status on Court Street is now effectively confirmed broken by real users. But before I conclude the station is fully inaccessible, I should check whether there are any other entrances I haven't accounted for."*
 
-```
-tool: nyc_accessibility_lookup
-input: "Amsterdam & W68th St"
-output: audio_signal ✅  |  construction ✅ none  |  311 complaints ✅ none
-→ CLEAR
-```
+→ **Decides to check station structure, not conclude yet.**
 
 ---
 
-**Step 4 — Alternative Crossing** *(Tool Call 5, triggered by FLAG)*
-
-W72nd is the user's usual crossing but has active construction. Planning Agent looks for the nearest safe alternative.
+**Step 4 — Check Station ADA Structure** *(Tool Call 3)*
 
 ```
-tool: nyc_accessibility_lookup
-input: "Broadway & W73rd St"
-output: audio_signal ✅  |  construction ✅ none  |  311 complaints ✅ none
-→ CLEAR — recommend as substitute crossing
+tool: nyc_subway_ada_lookup
+input: station_name: "Jay St-MetroTech"
+
+output: {
+  "station": "Jay St-MetroTech",
+  "ada_status": "Partially Accessible",
+  "accessible_entrances": [
+    {
+      "name": "Jay Street (A/C/F)",
+      "type": "elevator",
+      "notes": "Primary ADA entrance"
+    },
+    {
+      "name": "Court Street (A/C)",
+      "type": "elevator", 
+      "notes": "Secondary ADA entrance"
+    }
+  ],
+  "non_ada_entrances": [
+    {
+      "name": "Willoughby Street (F)",
+      "type": "stairs only"
+    }
+  ]
+}
 ```
+
+**Planning Agent reasoning after Tool Call 3:**
+> *"Confirmed: this station has exactly two ADA-accessible entrances. Tool Call 1 showed the first is officially out. Tool Calls 2 confirmed the second is also out based on this morning's 311 reports. The third entrance is stairs only — not usable. The station has no currently functional accessible entry point. The conclusion is now fully supported across three independent data sources."*
 
 ---
 
 **Step 5 — Response to User**
 
-Planning Agent synthesizes findings and speaks via Magpie TTS:
+Planning Agent synthesizes and speaks via Magpie TTS:
 
-> *"Your usual route home looks clear today — except for one thing. There's active construction at your usual crossing on 72nd Street. I'm routing you to 73rd Street instead, which has a confirmed audio signal and no construction. Everything else on your route is clear. Setting your goal now."*
-
-Then: `set_goal` → Ambient Agent enters Goal Mode, programmed with the adjusted route and the W72nd Street warning injected into NYC context.
+> *"If you don't want to use stairs, not right now. Both accessible entrances at Jay Street are out of service. The Jay Street elevator has been down since 6 AM — that's official. The Court Street elevator shows unknown status in MTA's system, but two people filed complaints about it this morning, so it's likely broken too. The only other entrance here is stairs only. Borough Hall station is two blocks east on Joralemon Street — it's fully accessible and showing no outage reports."*
 
 ---
 
 ### The "So What" for Judges
 
-> Google Maps would have sent her to 72nd Street. Spark Sight checked ahead, found the problem, and already picked a safer crossing — before she left the building.
+> MTA's app would have shown one elevator "Out of Service" and one "Unknown" — and left the user to figure out what that means. Spark Sight read the gap in the official data, filled it with 311 signal, cross-referenced the station's entrance structure, and delivered a single actionable answer: **don't go in here, go two blocks east instead.**
+
+> No GPS. No navigation. No memorized route. Just a station name read from a sign — and three datasets reasoned into one clear answer.
 
 ---
