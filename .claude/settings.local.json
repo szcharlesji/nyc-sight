@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "WebFetch(domain:www.gradio.app)",
-      "mcp__claude_ai_Context7__query-docs",
-      "Bash(uv run:)"
-    ]
-  }
-}
