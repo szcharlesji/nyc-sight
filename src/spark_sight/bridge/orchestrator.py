@@ -242,11 +242,12 @@ class Orchestrator:
     async def run_ambient_loop(self) -> None:
         """Continuous frame-processing loop for the Ambient Agent.
 
-        Pulls the latest frame from the buffer, runs it through the
-        Ambient Agent, and routes the response.  Runs until cancelled.
+        Only processes the **latest** frame and skips if it hasn't changed
+        since the last inference (same timestamp).  This ensures the model
+        always sees the freshest view and never re-processes stale frames.
 
-        The loop is naturally throttled by NIM inference latency (~250-500ms
-        per frame on Cosmos Reason2-8B), yielding ~2-4 FPS.
+        The loop is naturally throttled by NIM inference latency (~1-3s
+        per frame on Cosmos Reason2-8B).
         """
         import time as _time
 
@@ -256,17 +257,37 @@ class Orchestrator:
 
         logger.info("Ambient processing loop started")
         frame_num = 0
+        last_ts = 0.0  # timestamp of the last frame we processed
+
         while True:
-            frame = self.frame_buffer.latest_base64()
-            if frame is None:
+            # Grab the freshest frame.
+            frame_obj = self.frame_buffer.latest()
+            if frame_obj is None:
                 await asyncio.sleep(0.1)  # no frames yet — back off
                 continue
 
+            # Skip if we already processed this exact frame.
+            if frame_obj.timestamp <= last_ts:
+                await asyncio.sleep(0.05)  # wait for a new frame
+                continue
+
+            last_ts = frame_obj.timestamp
             frame_num += 1
+
+            # Re-grab the absolute latest right before inference
+            # (a newer frame may have arrived while we were awaiting).
+            fresh = self.frame_buffer.latest()
+            if fresh is not None and fresh.timestamp > last_ts:
+                frame_obj = fresh
+                last_ts = fresh.timestamp
+
+            import base64
+            frame_b64 = base64.b64encode(frame_obj.jpeg).decode("ascii")
+
             t0 = _time.time()
             try:
                 response = await self.ambient_agent.process(
-                    {"frame_base64": frame}
+                    {"frame_base64": frame_b64}
                 )
                 dt = round((_time.time() - t0) * 1000)
                 snap = self.state.get_snapshot()
@@ -283,8 +304,7 @@ class Orchestrator:
             except Exception:
                 logger.exception("Error in ambient loop iteration #%d", frame_num)
 
-            # Yield to the event loop.  No explicit FPS cap — inference
-            # latency is the natural governor.
+            # Yield to the event loop.
             await asyncio.sleep(0)
 
     # ------------------------------------------------------------------
