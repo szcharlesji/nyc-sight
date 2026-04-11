@@ -14,6 +14,9 @@ Python 3.13, managed with `uv`. All commands run from the project root.
 # Install dependencies (creates .venv automatically)
 uv sync
 
+# Copy and edit .env with your GB10 IP (required for NIM endpoints)
+cp .env.example .env
+
 # Run the server
 uv run python -m spark_sight.main --debug
 
@@ -54,23 +57,30 @@ bash scripts/cos_nemo_docker.sh
   - `frame_buffer.py` — **FrameBuffer**: thread-safe ring buffer (`deque(maxlen=30)`) storing raw JPEG frames. The Ambient Agent reads the latest frame via `latest_base64()`.
   - `app.py` — `create_app()` factory returns the FastAPI app. Routes: `/` (client HTML), `/health`, `/debug` (when debug=True), `/ws` (unified WebSocket). Queues for TTS, status, and audio are created here and exposed on `app.state`.
 
-- **`main.py`** — Entry point. Wires PromptState, FrameBuffer, both agents, and the Orchestrator together. Registers startup/shutdown events that start/stop agents and the ambient loop as an `asyncio.Task`.
+- **`speech/`** — Speech synthesis and recognition clients for Magpie TTS and Parakeet ASR.
+  - `tts.py` — **TTSClient**: wraps OpenAI-compatible `/v1/audio/speech` endpoint. `tts_loop()` drains the Orchestrator speech queue → Magpie NIM → WAV bytes → `tts_queue` → iPhone.
+  - `asr.py` — **ASRClient**: wraps Whisper-compatible `/v1/audio/transcriptions`. `asr_loop()` buffers PCM from `audio_queue`, runs energy-based VAD, packages WAV, sends to Parakeet, routes transcript to `Orchestrator.handle_transcript()` → Planning Agent.
+
+- **`config.py`** — Settings module. Reads 4 NIM endpoints from `.env` via `python-dotenv`. Dataclass-based with defaults for all fields.
+
+- **`main.py`** — Entry point. Wires PromptState, FrameBuffer, both agents, TTSClient, ASRClient, and the Orchestrator. Starts 3 background loops on startup: ambient frame processing, TTS synthesis, ASR transcription.
 
 - **`static/client.html`** — iPhone web client served at `/`.
 
 ### Data Flow
 
-1. iPhone → WebSocket (`/ws`) → `FrameBuffer` (camera frames) / `audio_queue` (mic PCM)
-2. `Orchestrator.run_ambient_loop()` → pulls latest frame from `FrameBuffer` → `AmbientAgent.process()` → `Orchestrator.handle_ambient_response()` → speech queue / state transitions
-3. Voice transcript → `PlanningAgent.process()` → `Orchestrator.handle_planning_response()` → updates `PromptState` / triggers inspect / enqueues speech
-4. Speech queue → TTS → WebSocket → iPhone
+1. iPhone camera → WebSocket (`/ws`) → `FrameBuffer`
+2. `Orchestrator.run_ambient_loop()` → latest frame → `AmbientAgent.process()` → `handle_ambient_response()` → speech queue / state transitions
+3. iPhone mic → WebSocket → `audio_queue` → `asr_loop()` (VAD + Parakeet) → `Orchestrator.handle_transcript()` → `PlanningAgent.process()` → `handle_planning_response()` → PromptState / speech queue
+4. Speech queue → `tts_loop()` → Magpie TTS NIM → WAV → `tts_queue` → WebSocket → iPhone speaker
 
 ### Key Design Patterns
 
 - **Agents never communicate directly.** All inter-agent communication flows through the Orchestrator and PromptState.
 - **PromptState is the only shared mutable state.** Planning writes, Ambient reads, Orchestrator mediates.
-- **Both agents use the OpenAI-compatible API** (`AsyncOpenAI` client) to talk to local NIM inference endpoints. No API key needed for local NIM.
-- **Graceful degradation**: if NIM inference fails or returns unparseable output, the Ambient Agent defaults to `CLEAR` (silent). The Planning Agent has a stub fallback when NIM isn't connected.
+- **All 4 models use OpenAI-compatible APIs** (`AsyncOpenAI` client) — chat completions for LLM/VLM, audio endpoints for ASR/TTS. No API keys needed for local NIM.
+- **Graceful degradation**: if NIM inference fails or returns unparseable output, the Ambient Agent defaults to `CLEAR` (silent). The Planning Agent falls back to raw text or error messages. TTS/ASR failures are logged and skipped.
+- **Configuration via `.env`**: all 4 NIM endpoint URLs and model names are configurable. Copy `.env.example` and set your GB10 IP.
 
 ### NIM Container Configuration
 
@@ -82,4 +92,4 @@ bash scripts/cos_nemo_docker.sh
 
 - Tests use `pytest` + `pytest-asyncio` for async tests and `unittest.mock.AsyncMock` for mocking NIM clients and agents.
 - `httpx` is a dev dependency used by FastAPI's `TestClient` (via Starlette).
-- Test files mirror source structure: `test_bridge.py` (PromptState + Orchestrator), `test_ambient.py` (AmbientAgent + ambient loop), `test_server.py` (HTTP + WebSocket), `test_frame_buffer.py`, `test_protocol.py`.
+- Test files mirror source structure: `test_bridge.py` (PromptState + Orchestrator), `test_ambient.py` (AmbientAgent + ambient loop), `test_planning.py` (PlanningAgent response parsing), `test_speech.py` (TTS/ASR clients + loops + VAD), `test_config.py` (settings), `test_server.py` (HTTP + WebSocket), `test_frame_buffer.py`, `test_protocol.py`.
