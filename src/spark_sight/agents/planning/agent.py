@@ -11,9 +11,9 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
-from nyc_sight.agents.base import BaseAgent
-from nyc_sight.bridge.models import PlanningAction, PlanningResponse
-from nyc_sight.bridge.prompt_state import PromptState
+from spark_sight.agents.base import BaseAgent
+from spark_sight.bridge.models import PlanningAction, PlanningResponse
+from spark_sight.bridge.prompt_state import PromptState
 
 logger = logging.getLogger(__name__)
 

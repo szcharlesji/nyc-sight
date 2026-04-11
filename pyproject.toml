@@ -1,5 +1,5 @@
 [project]
-name = "nyc-sight"
+name = "spark-sight"
 version = "0.1.0"
 description = "Real-time ambient AI assistant for visually impaired New Yorkers — runs entirely on NVIDIA GB10"
 readme = "README.md"

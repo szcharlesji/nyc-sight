@@ -14,16 +14,16 @@ import logging
 from enum import StrEnum
 from typing import TYPE_CHECKING
 
-from nyc_sight.bridge.models import (
+from spark_sight.bridge.models import (
     AmbientResponse,
     AmbientSignal,
     PlanningAction,
     PlanningResponse,
 )
-from nyc_sight.bridge.prompt_state import PromptState
+from spark_sight.bridge.prompt_state import PromptState
 
 if TYPE_CHECKING:
-    from nyc_sight.agents.base import BaseAgent
+    from spark_sight.agents.base import BaseAgent
 
 logger = logging.getLogger(__name__)
 

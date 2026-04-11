@@ -9,10 +9,10 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from nyc_sight.agents.ambient import AmbientAgent
-from nyc_sight.agents.planning import PlanningAgent
-from nyc_sight.bridge.orchestrator import Orchestrator
-from nyc_sight.bridge.prompt_state import PromptState
+from spark_sight.agents.ambient import AmbientAgent
+from spark_sight.agents.planning import PlanningAgent
+from spark_sight.bridge.orchestrator import Orchestrator
+from spark_sight.bridge.prompt_state import PromptState
 
 logging.basicConfig(
     level=logging.INFO,

@@ -12,7 +12,7 @@ import threading
 from copy import deepcopy
 from datetime import UTC, datetime
 
-from nyc_sight.bridge.models import AgentMode, PromptStateData
+from spark_sight.bridge.models import AgentMode, PromptStateData
 
 logger = logging.getLogger(__name__)
 

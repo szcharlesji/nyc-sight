@@ -1,4 +1,4 @@
-from nyc_sight.bridge.models import (
+from spark_sight.bridge.models import (
     AgentMode,
     AmbientResponse,
     AmbientSignal,
@@ -6,8 +6,8 @@ from nyc_sight.bridge.models import (
     PlanningResponse,
     PromptStateData,
 )
-from nyc_sight.bridge.orchestrator import Orchestrator
-from nyc_sight.bridge.prompt_state import PromptState
+from spark_sight.bridge.orchestrator import Orchestrator
+from spark_sight.bridge.prompt_state import PromptState
 
 __all__ = [
     "AgentMode",

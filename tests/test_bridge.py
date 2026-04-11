@@ -4,15 +4,15 @@ from __future__ import annotations
 
 import pytest
 
-from nyc_sight.bridge.models import (
+from spark_sight.bridge.models import (
     AgentMode,
     AmbientResponse,
     AmbientSignal,
     PlanningAction,
     PlanningResponse,
 )
-from nyc_sight.bridge.orchestrator import Orchestrator, SpeechPriority
-from nyc_sight.bridge.prompt_state import PromptState
+from spark_sight.bridge.orchestrator import Orchestrator, SpeechPriority
+from spark_sight.bridge.prompt_state import PromptState
 
 
 # ---------------------------------------------------------------------------
