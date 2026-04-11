@@ -40,6 +40,7 @@ def create_app(
     frame_buffer: FrameBuffer | None = None,
     *,
     debug: bool = False,
+    lifespan=None,
 ) -> FastAPI:
     """Build and return the FastAPI application.
 
@@ -50,10 +51,12 @@ def create_app(
         provided.
     debug:
         Enable the ``/debug`` endpoint and verbose WebSocket logging.
+    lifespan:
+        Optional async context manager for startup/shutdown (FastAPI lifespan).
     """
     frame_buffer = frame_buffer or FrameBuffer()
 
-    app = FastAPI(title="Spark Sight", debug=debug)
+    app = FastAPI(title="Spark Sight", debug=debug, lifespan=lifespan)
 
     # Queues that feed the WebSocket send loop.
     tts_queue: asyncio.Queue[bytes] = asyncio.Queue()

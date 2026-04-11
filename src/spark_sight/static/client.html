@@ -227,6 +227,18 @@
   }
   #chat-send:disabled { opacity: 0.4; cursor: default; }
 
+  /* Agent status bar */
+  #agent-status {
+    padding: 8px 12px; border-bottom: 1px solid #333;
+    font-size: 11px; font-family: 'SF Mono', Menlo, monospace;
+    color: #888; flex-shrink: 0;
+    display: grid; grid-template-columns: 1fr 1fr; gap: 4px 12px;
+  }
+  #agent-status .as-label { color: #555; text-transform: uppercase; font-size: 9px; letter-spacing: 0.5px; }
+  #agent-status .as-val { color: #ccc; }
+  #agent-status .as-val.active { color: #5DCAA5; }
+  #agent-status .as-val.warn { color: #EF9F27; }
+
   /* Voice mode toolbar */
   #voice-toolbar {
     padding: 6px 12px; border-top: 1px solid #333;
@@ -276,10 +288,24 @@
     <span>Chat with Spark Sight</span>
     <button id="chat-close">×</button>
   </div>
+  <div id="agent-status">
+    <div>
+      <div class="as-label">Ambient (Cosmos)</div>
+      <div>mode: <span id="as-mode" class="as-val">patrol</span></div>
+      <div>signal: <span id="as-signal" class="as-val">—</span></div>
+      <div>frames: <span id="as-frames" class="as-val">0</span></div>
+    </div>
+    <div>
+      <div class="as-label">Planning (Nemotron)</div>
+      <div>action: <span id="as-action" class="as-val">—</span></div>
+      <div>goal: <span id="as-goal" class="as-val">—</span></div>
+      <div>prompt: <span id="as-prompt" class="as-val">—</span></div>
+    </div>
+  </div>
   <div id="chat-messages"></div>
   <div id="voice-toolbar">
-    <button id="tts-toggle" class="voice-btn active"><span class="dot"></span>TTS</button>
-    <button id="stt-toggle" class="voice-btn active"><span class="dot"></span>STT</button>
+    <button id="tts-toggle" class="voice-btn"><span class="dot"></span>TTS</button>
+    <button id="stt-toggle" class="voice-btn"><span class="dot"></span>STT</button>
     <span id="voice-status" style="margin-left:auto;font-size:10px"></span>
   </div>
   <div id="chat-input-area">
@@ -311,8 +337,8 @@ let audioCtx = null;
 let mediaStream = null;
 let frameInterval = null;
 let stats = { frames: 0, audio: 0, msgsIn: 0, fpsTicks: [] };
-let ttsEnabled = true;
-let sttEnabled = true;
+let ttsEnabled = false;
+let sttEnabled = false;
 let micProcessor = null;
 let micSource = null;
 
@@ -509,11 +535,43 @@ const SIG_CSS_MOD = {
   WARNING: 'warning', FAILURE: 'failure', GOAL_REACHED: 'goal-reached',
 };
 
+// Agent status panel refs
+const $asMode   = document.getElementById('as-mode');
+const $asSignal = document.getElementById('as-signal');
+const $asFrames = document.getElementById('as-frames');
+const $asAction = document.getElementById('as-action');
+const $asGoal   = document.getElementById('as-goal');
+const $asPrompt = document.getElementById('as-prompt');
+let ambientFrameCount = 0;
+
+function updateAgentStatus(s) {
+  // Update ambient status from every status message
+  if (s.mode) {
+    $asMode.textContent = s.mode;
+    $asMode.className = 'as-val' + (s.mode === 'goal' ? ' active' : '');
+  }
+  if (s.goal) {
+    $asGoal.textContent = s.goal.length > 30 ? s.goal.slice(0, 30) + '…' : s.goal;
+    $asGoal.className = 'as-val active';
+  } else if (s.mode === 'patrol') {
+    $asGoal.textContent = '—';
+    $asGoal.className = 'as-val';
+  }
+  if (s.signal && s.signal !== 'TRANSCRIPT') {
+    $asSignal.textContent = s.signal;
+    $asSignal.className = 'as-val' + (s.signal === 'WARNING' ? ' warn' : s.signal !== 'CLEAR' ? ' active' : '');
+    ambientFrameCount++;
+    $asFrames.textContent = ambientFrameCount;
+  }
+}
+
 function handleStatus(s) {
   if (s.type === 'status') {
     $mode.textContent = s.mode === 'goal'
       ? 'goal: ' + (s.goal || '')
       : 'patrol mode';
+
+    updateAgentStatus(s);
 
     if (s.signal === 'TRANSCRIPT') {
       $signal.textContent = 'you said:';
@@ -652,6 +710,17 @@ async function sendChat() {
               badge.className = 'chat-action-badge';
               badge.textContent = '⚡ ' + d.action + (d.goal ? ': ' + d.goal : '');
               agentEl.appendChild(badge);
+            }
+            // Update planning status panel
+            $asAction.textContent = d.action || '—';
+            if (d.goal) {
+              $asGoal.textContent = d.goal.length > 30 ? d.goal.slice(0, 30) + '…' : d.goal;
+              $asGoal.className = 'as-val active';
+              $asMode.textContent = 'goal';
+              $asMode.className = 'as-val active';
+            }
+            if (d.inspect_prompt) {
+              $asPrompt.textContent = d.inspect_prompt.length > 30 ? d.inspect_prompt.slice(0, 30) + '…' : d.inspect_prompt;
             }
             $chatMsgs.scrollTop = $chatMsgs.scrollHeight;
           } else if (d.type === 'error') {

@@ -14,6 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 import uvicorn
 
@@ -47,8 +48,8 @@ def build_app(*, debug: bool = False):
     tts_client = TTSClient()
     asr_client = ASRClient()
 
-    # Server (creates its own queues)
-    app = create_app(frame_buffer, debug=debug)
+    # Server (creates its own queues) — lifespan handles startup/shutdown.
+    app = create_app(frame_buffer, debug=debug, lifespan=_lifespan)
 
     # Orchestrator — wired to server callbacks for push notifications.
     orchestrator = Orchestrator(
@@ -67,66 +68,52 @@ def build_app(*, debug: bool = False):
     app.state.tts_client = tts_client
     app.state.asr_client = asr_client
 
-    # Background task handles.
-    app.state._bg_tasks: list[asyncio.Task] = []
+    return app
 
-    @app.on_event("startup")
-    async def startup() -> None:
-        # Start all clients.
-        await ambient.start()
-        await planning.start()
-        await tts_client.start()
-        await asr_client.start()
 
-        # Start background loops.
-        tasks = app.state._bg_tasks
+@asynccontextmanager
+async def _lifespan(app):
+    """Start/stop agents and background loops."""
+    ambient = app.state.ambient_agent
+    planning = app.state.planning_agent
+    tts_client = app.state.tts_client
+    asr_client = app.state.asr_client
+    orchestrator = app.state.orchestrator
 
-        # 1. Ambient frame-processing loop.
-        tasks.append(asyncio.create_task(
-            orchestrator.run_ambient_loop(),
-            name="ambient-loop",
-        ))
+    # Start all clients.
+    await ambient.start()
+    await planning.start()
+    await tts_client.start()
+    await asr_client.start()
 
-        # 2. TTS synthesis loop: speech queue → Magpie → WAV → iPhone.
-        tasks.append(asyncio.create_task(
-            tts_loop(orchestrator, tts_client, app.state.tts_queue),
-            name="tts-loop",
-        ))
-
-        # 3. ASR transcription loop: iPhone mic → Parakeet → Planning Agent.
-        tasks.append(asyncio.create_task(
-            asr_loop(
-                app.state.audio_queue,
-                asr_client,
-                orchestrator.handle_transcript,
-            ),
+    # Start background loops.
+    bg_tasks = [
+        asyncio.create_task(orchestrator.run_ambient_loop(), name="ambient-loop"),
+        asyncio.create_task(
+            tts_loop(orchestrator, tts_client, app.state.tts_queue), name="tts-loop",
+        ),
+        asyncio.create_task(
+            asr_loop(app.state.audio_queue, asr_client, orchestrator.handle_transcript),
             name="asr-loop",
-        ))
+        ),
+    ]
 
-        logger.info(
-            "Spark Sight started — agents live, TTS/ASR active, server ready"
-        )
-
-    @app.on_event("shutdown")
-    async def shutdown() -> None:
-        # Cancel all background tasks.
-        for task in app.state._bg_tasks:
+    logger.info("Spark Sight started — agents live, TTS/ASR active, server ready")
+    try:
+        yield
+    finally:
+        for task in bg_tasks:
             task.cancel()
-        for task in app.state._bg_tasks:
+        for task in bg_tasks:
             try:
                 await task
             except asyncio.CancelledError:
                 pass
-        app.state._bg_tasks.clear()
-
-        # Stop all clients.
         await asr_client.stop()
         await tts_client.stop()
         await ambient.stop()
         await planning.stop()
         logger.info("Spark Sight shut down")
-
-    return app
 
 
 def main() -> None:
