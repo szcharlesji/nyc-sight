@@ -321,10 +321,11 @@ class Orchestrator:
         if self._on_status is None:
             return
         snap = self.state.get_snapshot()
+        # Ensure signal is a plain string (not StrEnum) for JSON serialization.
         await self._on_status(
-            response.signal,
+            str(response.signal),
             response.message or None,
-            snap.mode,
+            str(snap.mode),
             snap.active_goal,
         )
 

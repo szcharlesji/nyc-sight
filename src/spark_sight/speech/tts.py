@@ -48,6 +48,8 @@ class TTSClient:
         self._model = model
         self._voice = voice
         self._client: AsyncOpenAI | None = None
+        self._consecutive_failures = 0
+        self._failed = False
 
     async def start(self) -> None:
         self._client = AsyncOpenAI(
@@ -62,12 +64,19 @@ class TTSClient:
             self._client = None
         logger.info("TTSClient stopped")
 
+    @property
+    def available(self) -> bool:
+        """Whether the TTS client is connected and has not failed."""
+        return self._client is not None and not self._failed
+
     async def synthesize(self, text: str) -> bytes | None:
         """Convert *text* to WAV audio bytes via Magpie NIM.
 
         Returns ``None`` if the client is not started or synthesis fails.
+        After 3 consecutive failures, marks itself as unavailable to
+        avoid spamming connection errors when the NIM isn't running.
         """
-        if self._client is None or not text.strip():
+        if self._client is None or self._failed or not text.strip():
             return None
 
         try:
@@ -77,12 +86,21 @@ class TTSClient:
                 voice=self._voice,
                 response_format="wav",
             )
-            # The response object supports .read() to get all bytes.
             wav_bytes = response.read()
+            self._consecutive_failures = 0
             logger.debug("TTS synthesized %d bytes for: %s", len(wav_bytes), text[:60])
             return wav_bytes
         except Exception:
-            logger.exception("TTS synthesis failed for: %s", text[:60])
+            self._consecutive_failures += 1
+            if self._consecutive_failures >= 3:
+                self._failed = True
+                logger.error(
+                    "TTS unavailable — Magpie NIM at %s not reachable after %d failures. "
+                    "TTS synthesis disabled. Speech will be text-only.",
+                    self._nim_base_url, self._consecutive_failures,
+                )
+            else:
+                logger.warning("TTS synthesis failed (%d/3): %s", self._consecutive_failures, text[:60])
             return None
 
 
@@ -108,10 +126,15 @@ async def tts_loop(
     logger.info("TTS loop started")
     while True:
         priority, text = await orchestrator.next_speech()
-        logger.info("TTS [%s]: %s", priority, text[:80])
 
+        if not tts_client.available:
+            # Magpie not running — just drain the queue silently.
+            logger.debug("TTS [%s] (skip, unavailable): %s", priority, text[:60])
+            continue
+
+        logger.info("TTS [%s]: %s", priority, text[:80])
         wav = await tts_client.synthesize(text)
         if wav:
             await tts_queue.put(wav)
         else:
-            logger.warning("TTS produced no audio for: %s", text[:60])
+            logger.debug("TTS produced no audio for: %s", text[:60])
