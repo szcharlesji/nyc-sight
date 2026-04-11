@@ -87,7 +87,7 @@ def build_app(*, debug: bool = False):
 def main() -> None:
     parser = argparse.ArgumentParser(description="Spark Sight server")
     parser.add_argument("--host", default="0.0.0.0", help="Bind address")
-    parser.add_argument("--port", type=int, default=8000, help="Bind port")
+    parser.add_argument("--port", type=int, default=3000, help="Bind port")
     parser.add_argument("--debug", action="store_true", help="Enable debug mode")
     parser.add_argument("--ssl-keyfile", default=None, help="SSL key file (for Safari camera access)")
     parser.add_argument("--ssl-certfile", default=None, help="SSL cert file")
