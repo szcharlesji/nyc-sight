@@ -57,13 +57,16 @@ Safety warnings (`WARNING`) always fire regardless of mode.
 - [x] `process()` method with input parsing and stub response
 - [x] NIM inference call structure (commented placeholder)
 - [x] Integration with shared `PromptState` (reads compiled prompt)
+- [x] `FrameBuffer` ring buffer — thread-safe, stores last 30 JPEG frames with timestamps
+- [x] `FrameBuffer.latest_base64()` — returns frame in the format `process()` expects
+- [x] iPhone → WebSocket → FrameBuffer pipeline (frames arrive via `server/app.py`)
+- [x] Orchestrator status callbacks — ambient signals push to iPhone HUD in real time
 
 ### TODO
 - [ ] Wire NIM inference — uncomment and test against live Cosmos Reason2 container
 - [ ] Response parsing — parse model output into `AmbientResponse` structured format
 - [ ] Frame preprocessing — resize/encode frames for optimal VLM input
 - [ ] Continuous loop runner — async loop that pulls frames from ring buffer at ~2-4 FPS
-- [ ] Ring buffer integration — connect to iPhone camera frame buffer
 - [ ] One-shot inspect mode — handle `inspect` queries from Planning Agent
 - [ ] Safety classifier — ensure WARNING signals are never suppressed
 - [ ] Performance tuning — optimize inference latency on GB10

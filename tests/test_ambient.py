@@ -11,10 +11,10 @@ from unittest.mock import AsyncMock
 import pytest
 
 from spark_sight.agents.ambient import AmbientAgent
-from spark_sight.bridge.frame_buffer import FrameBuffer
 from spark_sight.bridge.models import AmbientResponse, AmbientSignal
 from spark_sight.bridge.orchestrator import Orchestrator
 from spark_sight.bridge.prompt_state import PromptState
+from spark_sight.server.frame_buffer import FrameBuffer
 
 
 # ---------------------------------------------------------------------------
@@ -24,28 +24,38 @@ from spark_sight.bridge.prompt_state import PromptState
 
 class TestFrameBuffer:
     def test_push_and_latest(self) -> None:
-        buf = FrameBuffer(maxlen=5)
-        buf.push("frame1")
-        buf.push("frame2")
-        assert buf.latest() == "frame2"
+        buf = FrameBuffer(max_size=5)
+        buf.push(b"frame1")
+        buf.push(b"frame2")
+        assert buf.latest() is not None
+        assert buf.latest().jpeg == b"frame2"
 
     def test_empty_returns_none(self) -> None:
-        buf = FrameBuffer(maxlen=5)
+        buf = FrameBuffer(max_size=5)
         assert buf.latest() is None
+        assert buf.latest_base64() is None
 
-    def test_len(self) -> None:
-        buf = FrameBuffer(maxlen=5)
-        assert len(buf) == 0
-        buf.push("a")
-        buf.push("b")
-        assert len(buf) == 2
+    def test_size(self) -> None:
+        buf = FrameBuffer(max_size=5)
+        assert buf.size == 0
+        buf.push(b"a")
+        buf.push(b"b")
+        assert buf.size == 2
 
     def test_maxlen_eviction(self) -> None:
-        buf = FrameBuffer(maxlen=3)
+        buf = FrameBuffer(max_size=3)
         for i in range(5):
-            buf.push(f"frame{i}")
-        assert len(buf) == 3
-        assert buf.latest() == "frame4"
+            buf.push(f"frame{i}".encode())
+        assert buf.size == 3
+        assert buf.latest().jpeg == b"frame4"
+
+    def test_latest_base64(self) -> None:
+        buf = FrameBuffer(max_size=5)
+        buf.push(b"test")
+        b64 = buf.latest_base64()
+        assert b64 is not None
+        import base64
+        assert base64.b64decode(b64) == b"test"
 
 
 # ---------------------------------------------------------------------------
@@ -219,7 +229,7 @@ class TestAmbientLoop:
     async def test_loop_processes_frames(self) -> None:
         state = PromptState()
         buf = FrameBuffer()
-        buf.push("frame_data")
+        buf.push(b"frame_data")
 
         mock_agent = AsyncMock(spec=AmbientAgent)
         mock_agent.process.return_value = AmbientResponse(
@@ -262,7 +272,7 @@ class TestAmbientLoop:
     async def test_loop_survives_agent_exception(self) -> None:
         state = PromptState()
         buf = FrameBuffer()
-        buf.push("frame_data")
+        buf.push(b"frame_data")
 
         call_count = 0
 

@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from spark_sight.agents.ambient import AmbientAgent
-from spark_sight.bridge.frame_buffer import FrameBuffer
+from spark_sight.server.frame_buffer import FrameBuffer
 from spark_sight.bridge.models import (
     AgentMode,
     AmbientResponse,
@@ -197,7 +197,7 @@ class TestOrchestratorInspect:
     async def test_inspect_calls_ambient_agent(self) -> None:
         state = PromptState()
         buf = FrameBuffer()
-        buf.push("test_frame")
+        buf.push(b"test_frame")
 
         mock_ambient = AsyncMock(spec=AmbientAgent)
         mock_ambient.inspect.return_value = AmbientResponse(
@@ -214,7 +214,9 @@ class TestOrchestratorInspect:
         )
         await orch.handle_planning_response(resp)
 
-        mock_ambient.inspect.assert_called_once_with("test_frame", "Read all visible text")
+        # The orchestrator calls latest_base64() which base64-encodes the raw bytes.
+        expected_b64 = buf.latest_base64()
+        mock_ambient.inspect.assert_called_once_with(expected_b64, "Read all visible text")
         # Two speech items: the planning message + the inspect result.
         _, text1 = await orch.next_speech()
         assert "look at that" in text1

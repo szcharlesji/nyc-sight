@@ -65,6 +65,8 @@ Returns a `PlanningResponse`:
 - [x] NIM inference call structure (commented placeholder)
 - [x] Integration with shared `PromptState` (reads snapshot for context)
 - [x] Stub responses for testing without NIM
+- [x] Mic audio → WebSocket → `audio_queue` pipeline (PCM chunks arrive via `server/app.py`)
+- [x] Orchestrator status callbacks — planning responses push to iPhone HUD
 
 ### TODO
 - [ ] Wire NIM inference — uncomment and test against live Nemotron Super container
@@ -74,6 +76,6 @@ Returns a `PlanningResponse`:
 - [ ] Tool execution — implement `web_search` (optional, WiFi-dependent)
 - [ ] NYC Open Data SQLite — schema design, data import pipeline, spatial indexing
 - [ ] GPS coordinate handling — receive and pass user location to tools
-- [ ] Parakeet ASR integration — receive streaming transcripts as triggers
+- [ ] Parakeet ASR bridge — drain `audio_queue`, stream PCM to Parakeet NIM gRPC, emit transcripts
 - [ ] Conversation memory — maintain short-term context across multiple interactions
 - [ ] Replan logic — sophisticated replanning when FAILURE reasons require route changes
