@@ -6,11 +6,11 @@
 # healthy before starting the next. This prevents vLLM's GPU memory profiling
 # race condition (AssertionError: free memory increased during profiling).
 #
-# Launch order (lightest GPU consumers first):
-#   1. Parakeet ASR         (ASR)  ~2-4GB
-#   2. Magpie TTS           (TTS)  ~11GB
-#   3. Cosmos-Reason2-8B    (VLM)  ~44GB
-#   4. Nemotron-Nano-12B    (LLM)  ~17-22GB
+# Launch order (heaviest GPU consumers first):
+#   1. Nemotron-3-Nano-30B  (LLM)  ~44GB
+#   2. Cosmos-Reason2-8B    (VLM)  ~44GB
+#   3. Magpie TTS           (TTS)  ~11GB
+#   4. Parakeet ASR         (ASR)  ~2-4GB
 #
 # Usage:
 #   export NGC_API_KEY=<your_key>
@@ -84,18 +84,18 @@ readonly MAGPIE_GRPC_PORT="${MAGPIE_GRPC_PORT:-50051}"
 readonly PARAKEET_GRPC_PORT="${PARAKEET_GRPC_PORT:-50052}"
 
 # Service definitions — parallel arrays for the sequential launch loop
-readonly SERVICES=(parakeet-asr magpie-tts cosmos nemotron)
-readonly CONTAINERS=(parakeet-asr magpie-tts cosmos-reason2-8b nemotron-nano)
+readonly SERVICES=(nemotron cosmos magpie-tts parakeet-asr)
+readonly CONTAINERS=(nemotron-nano cosmos-reason2-8b magpie-tts parakeet-asr)
 readonly HEALTH_URLS=(
-    "http://0.0.0.0:${PARAKEET_HTTP_PORT}/v1/health/ready"
-    "http://0.0.0.0:${MAGPIE_HTTP_PORT}/v1/health/ready"
-    "http://0.0.0.0:${COSMOS_PORT}/v1/models"
     "http://0.0.0.0:${NEMOTRON_PORT}/v1/models"
+    "http://0.0.0.0:${COSMOS_PORT}/v1/models"
+    "http://0.0.0.0:${MAGPIE_HTTP_PORT}/v1/health/ready"
+    "http://0.0.0.0:${PARAKEET_HTTP_PORT}/v1/health/ready"
 )
-# Riva services: 1800s (up to 30 min for first-run TRT engine compilation)
 # vLLM services: 600s (5-8 min for bf16 torch.compile)
-readonly TIMEOUTS=(1800 1800 600 600)
-readonly SMOKE_TYPES=(none tts vlm llm)
+# Riva services: 1800s (up to 30 min for first-run TRT engine compilation)
+readonly TIMEOUTS=(600 600 1800 1800)
+readonly SMOKE_TYPES=(llm vlm tts none)
 
 # ─── Helper Functions ─────────────────────────────────────────────────────────
 

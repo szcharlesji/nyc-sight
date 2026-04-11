@@ -8,5 +8,4 @@ build/
 .pytest_cache/
 .ruff_cache/
 *.pem
-**/__pycache__/
 .env

@@ -20,11 +20,14 @@ networks:
 
 services:
   # ---------------------------------------------------------------------------
-  # Nemotron-Nano-12B-v2-VL (LLM) — ~17-22GB GPU
+  # Nemotron-3-Nano-30B (LLM) — ~44GB GPU
   #
-  # Uses model-free-nim (generic NIM runtime) with local FP8 weights.
+  # Uses model-free-nim (generic NIM runtime) with local NVFP4 weights.
   # The `command:` directive passes the model path + --trust-remote-code
   # because model-free-nim expects the model path as a CLI argument.
+  #
+  # VLLM_USE_FLASHINFER_MOE_FP4=0 disables flashinfer's MoE FP4 kernel
+  # which crashes with CUDA graph errors on GB10 (flashinfer issue #2776).
   # ---------------------------------------------------------------------------
   nemotron:
     container_name: nemotron-nano
@@ -43,16 +46,19 @@ services:
     environment:
       - NGC_API_KEY=${NGC_API_KEY}
       # Path inside container where model-free-nim finds the weights
-      - NIM_MODEL_PATH=/mnt/models/${NEMOTRON_MODEL_SUBDIR:-nvidia--NVIDIA-Nemotron-Nano-12B-v2-VL-FP8}
+      - NIM_MODEL_PATH=/mnt/models/${NEMOTRON_MODEL_SUBDIR:-nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4}
       # Model name returned by /v1/models and expected in API requests
       - NIM_SERVED_MODEL_NAME=${NEMOTRON_MODEL_NAME:-nemotron-nano}
-      # KV cache budget: 0.20 on GB10 with this model
-      - NIM_KVCACHE_PERCENT=${NEMOTRON_KVCACHE_PERCENT:-0.20}
+      # KV cache budget: 0.35 = ~17GB on GB10 with this model
+      - NIM_KVCACHE_PERCENT=${NEMOTRON_KVCACHE_PERCENT:-0.35}
       # Context window cap — default (131072) blows KV cache budget
       - NIM_MAX_MODEL_LEN=${NEMOTRON_MAX_MODEL_LEN:-32768}
+      # Disable flashinfer MoE FP4 kernel — CUDA graph crash on GB10/SM121
+      # See: https://github.com/flashinfer-ai/flashinfer/issues/2776
+      - VLLM_USE_FLASHINFER_MOE_FP4=0
     # model-free-nim entrypoint expects model path + flags as CLI arguments
     command:
-      - /mnt/models/${NEMOTRON_MODEL_SUBDIR:-nvidia--NVIDIA-Nemotron-Nano-12B-v2-VL-FP8}
+      - /mnt/models/${NEMOTRON_MODEL_SUBDIR:-nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4}
       - --trust-remote-code
     deploy:
       resources:
@@ -93,7 +99,7 @@ services:
       - NGC_API_KEY=${NGC_API_KEY}
       # Force bf16 model profile — FP8 is broken on SM121
       - NIM_MODEL_PROFILE=${COSMOS_BF16_PROFILE:-3266ed3ec2297386d2e4a94e6c84a5b0ba92244f787c538f33577c4c78c5aef2}
-      - NIM_KVCACHE_PERCENT=${COSMOS_KVCACHE_PERCENT:-0.20}
+      - NIM_KVCACHE_PERCENT=${COSMOS_KVCACHE_PERCENT:-0.35}
       # Default max_model_len (262144) needs 36GB KV alone — cap to 16384
       - NIM_MAX_MODEL_LEN=${COSMOS_MAX_MODEL_LEN:-16384}
     deploy:
@@ -138,8 +144,8 @@ services:
       # Riva NIMs accept custom internal ports (unlike vLLM's fixed 8000)
       - NIM_HTTP_API_PORT=9000
       - NIM_GRPC_API_PORT=50051
-      # Select the Magpie Multilingual TTS model; prebuilt skips TRT compilation
-      - NIM_TAGS_SELECTOR=name=magpie-tts-multilingual,model_type=prebuilt
+      # Select the Magpie Multilingual TTS model
+      - NIM_TAGS_SELECTOR=name=magpie-tts-multilingual
     deploy:
       resources:
         reservations:
@@ -177,8 +183,8 @@ services:
       - NGC_API_KEY=${NGC_API_KEY}
       - NIM_HTTP_API_PORT=9001
       - NIM_GRPC_API_PORT=50052
-      # Streaming transcription mode; prebuilt skips TRT compilation
-      - NIM_TAGS_SELECTOR=mode=str,model_type=prebuilt
+      # Streaming transcription mode
+      - NIM_TAGS_SELECTOR=mode=str
     deploy:
       resources:
         reservations:
