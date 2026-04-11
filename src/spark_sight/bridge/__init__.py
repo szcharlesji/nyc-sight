@@ -1,3 +1,4 @@
+from spark_sight.bridge.frame_buffer import FrameBuffer
 from spark_sight.bridge.models import (
     AgentMode,
     AmbientResponse,
@@ -13,6 +14,7 @@ __all__ = [
     "AgentMode",
     "AmbientResponse",
     "AmbientSignal",
+    "FrameBuffer",
     "Orchestrator",
     "PlanningAction",
     "PlanningResponse",
