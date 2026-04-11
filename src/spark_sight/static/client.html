@@ -90,6 +90,107 @@
   #debug-panel pre { white-space: pre-wrap; word-break: break-all; }
   .dbg-label { color: #888; }
   .dbg-value { color: #5DCAA5; }
+
+  /* ── Chat panel ──────────────────────────────── */
+  #chat-toggle {
+    position: absolute; bottom: 150px; right: 16px; z-index: 30;
+    width: 48px; height: 48px; border-radius: 50%;
+    background: #5DCAA5; border: none; color: #000;
+    font-size: 22px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.5);
+    transition: transform 0.15s;
+  }
+  #chat-toggle:active { transform: scale(0.9); }
+
+  #chat-panel {
+    position: absolute; bottom: 0; right: 0; z-index: 25;
+    width: min(400px, 100vw); height: 70vh;
+    background: rgba(18,18,18,0.97);
+    border-left: 1px solid #333; border-top: 1px solid #333;
+    border-radius: 16px 0 0 0;
+    display: none; flex-direction: column;
+    backdrop-filter: blur(12px); -webkit-backdrop-filter: blur(12px);
+  }
+  #chat-panel.open { display: flex; }
+
+  #chat-header {
+    padding: 12px 16px;
+    border-bottom: 1px solid #333;
+    display: flex; justify-content: space-between; align-items: center;
+    font-weight: 600; font-size: 14px; flex-shrink: 0;
+  }
+  #chat-close {
+    background: none; border: none; color: #888; font-size: 20px;
+    cursor: pointer; padding: 0 4px;
+  }
+
+  #chat-messages {
+    flex: 1; overflow-y: auto; padding: 12px;
+    display: flex; flex-direction: column; gap: 6px;
+  }
+  #chat-messages::-webkit-scrollbar { width: 4px; }
+  #chat-messages::-webkit-scrollbar-thumb { background: #444; border-radius: 2px; }
+
+  .chat-msg {
+    padding: 8px 12px; border-radius: 12px;
+    max-width: 88%; font-size: 14px; line-height: 1.45;
+    word-wrap: break-word; white-space: pre-wrap;
+  }
+  .chat-msg.user {
+    align-self: flex-end;
+    background: #2563EB; color: #fff;
+    border-bottom-right-radius: 4px;
+  }
+  .chat-msg.agent {
+    align-self: flex-start;
+    background: #2a2a2a; color: #e8e8e8;
+    border-bottom-left-radius: 4px;
+  }
+  .chat-msg.agent.streaming::after {
+    content: '▋'; animation: blink 0.7s step-end infinite;
+  }
+  @keyframes blink { 50% { opacity: 0; } }
+  .chat-msg.system {
+    align-self: center; background: none;
+    color: #777; font-size: 11px; font-style: italic;
+    padding: 2px 8px;
+  }
+  .chat-msg.asr {
+    align-self: flex-end;
+    background: rgba(93,202,165,0.12); color: #5DCAA5;
+    font-size: 12px; border: 1px solid rgba(93,202,165,0.25);
+  }
+  .chat-msg.tts {
+    align-self: flex-start;
+    background: rgba(239,159,39,0.12); color: #EF9F27;
+    font-size: 12px; border: 1px solid rgba(239,159,39,0.25);
+  }
+  .chat-action-badge {
+    display: inline-block; font-size: 10px; font-weight: 600;
+    padding: 1px 6px; border-radius: 4px; margin-top: 4px;
+    background: rgba(93,202,165,0.2); color: #5DCAA5;
+  }
+
+  #chat-input-area {
+    padding: 10px 12px; border-top: 1px solid #333;
+    display: flex; gap: 8px; flex-shrink: 0;
+  }
+  #chat-input {
+    flex: 1; background: #1a1a1a; border: 1px solid #444;
+    color: #fff; border-radius: 10px; padding: 10px 14px;
+    font-size: 14px; outline: none; font-family: inherit;
+  }
+  #chat-input:focus { border-color: #5DCAA5; }
+  #chat-input::placeholder { color: #666; }
+  #chat-send {
+    background: #5DCAA5; border: none; color: #000;
+    width: 40px; height: 40px; border-radius: 50%;
+    font-size: 18px; cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    flex-shrink: 0;
+  }
+  #chat-send:disabled { opacity: 0.4; cursor: default; }
 </style>
 </head>
 <body>
@@ -113,6 +214,19 @@
   <div id="mode">—</div>
   <div id="signal"></div>
   <div id="message">tap start to begin</div>
+</div>
+
+<button id="chat-toggle" title="Chat">✉</button>
+<div id="chat-panel">
+  <div id="chat-header">
+    <span>Chat with Spark Sight</span>
+    <button id="chat-close">×</button>
+  </div>
+  <div id="chat-messages"></div>
+  <div id="chat-input-area">
+    <input id="chat-input" type="text" placeholder="Type a message…" autocomplete="off">
+    <button id="chat-send">↑</button>
+  </div>
 </div>
 
 <div id="start-overlay">
@@ -313,7 +427,7 @@ async function playTTS(wavBuffer) {
   }
 }
 
-// ── HUD status updates ────────────────────────────────
+// ── HUD status updates ────────────────────────────────────
 const SIG_CLASS = {
   WARNING:      'sig-warning',
   PROGRESS:     'sig-progress',
@@ -329,29 +443,129 @@ function handleStatus(s) {
       : 'patrol mode';
 
     if (s.signal === 'TRANSCRIPT') {
-      // ASR transcript — show what the user said.
       $signal.textContent = 'you said:';
       $signal.className = '';
       if (s.message) $message.textContent = s.message;
       appendDebugLog('ASR: ' + (s.message || ''));
+      // Mirror ASR transcript into chat window.
+      addChatMsg('asr', '🎙 ' + (s.message || ''));
     } else if (s.signal && s.signal !== 'CLEAR') {
       $signal.className = SIG_CLASS[s.signal] || '';
       $signal.textContent = s.signal;
       if (s.message) $message.textContent = s.message;
       appendDebugLog(s.signal + (s.message ? ': ' + s.message : ''));
+      // Mirror agent signals into chat window.
+      if (s.message) addChatMsg('tts', '🔊 ' + s.message);
     }
   } else if (s.type === 'speech') {
     $message.textContent = s.text;
     appendDebugLog('TTS: ' + s.text);
+    addChatMsg('tts', '🔊 ' + s.text);
   } else if (s.type === 'transcript') {
     $signal.textContent = 'you said:';
     $signal.className = '';
     $message.textContent = s.text;
     appendDebugLog('ASR: ' + s.text);
+    addChatMsg('asr', '🎙 ' + s.text);
   }
 }
 
-// ── Debug helpers ──────────────────────────────────────
+// ── Chat panel ─────────────────────────────────────────
+const $chatPanel = document.getElementById('chat-panel');
+const $chatMsgs  = document.getElementById('chat-messages');
+const $chatIn    = document.getElementById('chat-input');
+const $chatSend  = document.getElementById('chat-send');
+let chatBusy = false;
+
+document.getElementById('chat-toggle').addEventListener('click', () => {
+  $chatPanel.classList.toggle('open');
+  if ($chatPanel.classList.contains('open')) $chatIn.focus();
+});
+document.getElementById('chat-close').addEventListener('click', () => {
+  $chatPanel.classList.remove('open');
+});
+
+function addChatMsg(type, text) {
+  const el = document.createElement('div');
+  el.className = 'chat-msg ' + type;
+  el.textContent = text;
+  $chatMsgs.appendChild(el);
+  $chatMsgs.scrollTop = $chatMsgs.scrollHeight;
+  return el;
+}
+
+async function sendChat() {
+  const text = $chatIn.value.trim();
+  if (!text || chatBusy) return;
+  $chatIn.value = '';
+  chatBusy = true;
+  $chatSend.disabled = true;
+
+  addChatMsg('user', text);
+  const agentEl = addChatMsg('agent', '');
+  agentEl.classList.add('streaming');
+
+  let fullText = '';
+  try {
+    const res = await fetch('/api/chat', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({message: text}),
+    });
+    const reader = res.body.getReader();
+    const dec = new TextDecoder();
+    let buf = '';
+
+    while (true) {
+      const {done, value} = await reader.read();
+      if (done) break;
+      buf += dec.decode(value, {stream: true});
+      const lines = buf.split('\n');
+      buf = lines.pop() || '';
+      for (const ln of lines) {
+        if (!ln.startsWith('data: ')) continue;
+        try {
+          const d = JSON.parse(ln.slice(6));
+          if (d.type === 'token') {
+            fullText += d.content;
+            agentEl.textContent = fullText;
+            $chatMsgs.scrollTop = $chatMsgs.scrollHeight;
+          } else if (d.type === 'done') {
+            agentEl.textContent = d.message || fullText;
+            agentEl.classList.remove('streaming');
+            if (d.action && d.action !== 'answer') {
+              const badge = document.createElement('div');
+              badge.className = 'chat-action-badge';
+              badge.textContent = '⚡ ' + d.action + (d.goal ? ': ' + d.goal : '');
+              agentEl.appendChild(badge);
+            }
+            $chatMsgs.scrollTop = $chatMsgs.scrollHeight;
+          } else if (d.type === 'error') {
+            agentEl.textContent = '⚠ ' + d.content;
+            agentEl.classList.remove('streaming');
+          }
+        } catch {}
+      }
+    }
+    // Fallback if stream ended without a done event.
+    if (agentEl.classList.contains('streaming')) {
+      agentEl.textContent = fullText || 'No response';
+      agentEl.classList.remove('streaming');
+    }
+  } catch {
+    agentEl.textContent = '⚠ Connection error';
+    agentEl.classList.remove('streaming');
+  }
+  chatBusy = false;
+  $chatSend.disabled = false;
+}
+
+$chatIn.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendChat(); }
+});
+$chatSend.addEventListener('click', sendChat);
+
+// ── Debug helpers ────────────────────────────────────────
 function appendDebugLog(line) {
   const lines = $dbgLog.textContent.split('\n').filter(Boolean);
   lines.push(new Date().toLocaleTimeString() + '  ' + line);

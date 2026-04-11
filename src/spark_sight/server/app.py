@@ -8,15 +8,20 @@ updates between the iPhone and the AI agents on the GB10.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from collections import deque
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
+from starlette.responses import StreamingResponse
+from openai import AsyncOpenAI
 
+from spark_sight.agents.planning.agent import _SYSTEM_PROMPT as _PLANNING_PROMPT
+from spark_sight.config import get_settings
 from spark_sight.server.frame_buffer import FrameBuffer
 from spark_sight.server.protocol import (
     MessageType,
@@ -137,6 +142,116 @@ def create_app(
                 },
                 "recent_events": list(debug_log),
             }
+
+    # ── Streaming chat endpoint ──────────────────────────────────────
+
+    def _parse_planning_json(text: str) -> dict[str, Any]:
+        """Best-effort parse of a Planning Agent JSON response."""
+        text = text.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+        try:
+            data = json.loads(text)
+            return {
+                "action": data.get("action", "answer"),
+                "message": data.get("message", ""),
+                "goal": data.get("goal"),
+                "nyc_context": data.get("nyc_context"),
+                "inspect_prompt": data.get("inspect_prompt"),
+            }
+        except (json.JSONDecodeError, ValueError):
+            return {"action": "answer", "message": text[:500] if text else ""}
+
+    @app.post("/api/chat")
+    async def chat_endpoint(request: Request) -> StreamingResponse:
+        """Stream a Planning Agent response for the chat UI.
+
+        Accepts ``{"message": str}``.  Returns an SSE stream of tokens
+        followed by a final ``done`` event with the parsed action.
+        After streaming, executes any side-effects (set_goal, etc.)
+        via the Orchestrator.
+        """
+        body = await request.json()
+        user_message = body.get("message", "")
+        if not user_message.strip():
+            return JSONResponse({"error": "empty message"}, status_code=400)
+
+        # Build context from current prompt state.
+        orchestrator = getattr(app.state, "orchestrator", None)
+        prompt_state = getattr(app.state, "prompt_state", None)
+
+        snap_mode, snap_goal, snap_nyc = "patrol", "none", "none"
+        if prompt_state:
+            snap = prompt_state.get_snapshot()
+            snap_mode = snap.mode
+            snap_goal = snap.active_goal or "none"
+            snap_nyc = snap.nyc_context or "none"
+
+        settings = get_settings()
+        user_content = (
+            f"User said: {user_message}\n\n"
+            f"Current mode: {snap_mode}\n"
+            f"Active goal: {snap_goal}\n"
+            f"NYC context: {snap_nyc}"
+        )
+
+        async def event_stream():
+            full_text = ""
+            client = AsyncOpenAI(
+                base_url=settings.nemotron.nim_url,
+                api_key="not-needed",
+            )
+            try:
+                stream = await client.chat.completions.create(
+                    model=settings.nemotron.model,
+                    messages=[
+                        {"role": "system", "content": _PLANNING_PROMPT},
+                        {"role": "user", "content": user_content},
+                    ],
+                    max_tokens=512,
+                    temperature=0.2,
+                    stream=True,
+                )
+                async for chunk in stream:
+                    if chunk.choices and chunk.choices[0].delta.content:
+                        token = chunk.choices[0].delta.content
+                        full_text += token
+                        yield f"data: {json.dumps({'type': 'token', 'content': token})}\n\n"
+
+                # Parse completed response.
+                parsed = _parse_planning_json(full_text)
+                yield f"data: {json.dumps({'type': 'done', **parsed})}\n\n"
+
+                # Execute side-effects via Orchestrator.
+                if orchestrator and parsed.get("action", "answer") != "answer":
+                    from spark_sight.bridge.models import (
+                        PlanningAction,
+                        PlanningResponse,
+                    )
+                    try:
+                        action = PlanningAction(parsed["action"])
+                        resp = PlanningResponse(
+                            action=action,
+                            message=parsed.get("message", ""),
+                            goal=parsed.get("goal"),
+                            nyc_context=parsed.get("nyc_context"),
+                            inspect_prompt=parsed.get("inspect_prompt"),
+                        )
+                        await orchestrator.handle_planning_response(resp)
+                    except (ValueError, Exception):
+                        logger.warning("Chat action execution failed", exc_info=True)
+
+            except Exception:
+                logger.exception("Chat streaming error")
+                yield f"data: {json.dumps({'type': 'error', 'content': 'Inference error — is the NIM running?'})}\n\n"
+            finally:
+                await client.close()
+
+        return StreamingResponse(
+            event_stream(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
 
     # ── WebSocket ────────────────────────────────────────────────────
 
