@@ -99,7 +99,7 @@ class Orchestrator:
         """Process a signal emitted by the Ambient Agent.
 
         Routing rules:
-        - CLEAR → do nothing.
+        - CLEAR → emit status (for frame counter) but no speech.
         - WARNING → enqueue speech at highest priority.
         - PROGRESS / CORRECTION → enqueue speech at ambient priority.
         - GOAL_REACHED → speak confirmation, reset prompt state to patrol.
@@ -107,6 +107,7 @@ class Orchestrator:
         """
         match response.signal:
             case AmbientSignal.CLEAR:
+                await self._emit_status(response)
                 return
 
             case AmbientSignal.WARNING:
@@ -119,15 +120,17 @@ class Orchestrator:
 
             case AmbientSignal.GOAL_REACHED:
                 await self._enqueue_speech(SpeechPriority.AMBIENT, response.message)
+                # Emit status BEFORE resetting so the client sees the completed goal.
+                await self._emit_status(response)
                 self.state.reset_goal()
                 logger.info("Goal reached — reverted to patrol")
-                await self._emit_status(response)
 
             case AmbientSignal.FAILURE:
                 await self._enqueue_speech(SpeechPriority.AMBIENT, response.message)
+                # Emit status BEFORE resetting so the client sees the failed goal.
+                await self._emit_status(response)
                 self.state.reset_goal()
                 logger.warning("Ambient FAILURE: %s", response.message)
-                await self._emit_status(response)
                 # Trigger replan on the Planning Agent.
                 await self._trigger_replan(response.message)
 
@@ -144,6 +147,12 @@ class Orchestrator:
         - answer → speak directly (no vision needed).
         - reset → clear goal, revert to patrol.
         """
+        logger.info(
+            "[Planning] action=%s | msg=%s | goal=%s",
+            response.action,
+            (response.message or "-")[:80],
+            (response.goal or "-")[:40],
+        )
         match response.action:
             case PlanningAction.SET_GOAL | PlanningAction.REPLAN:
                 if response.goal:
@@ -196,39 +205,109 @@ class Orchestrator:
                     )
 
     # ------------------------------------------------------------------
+    # Transcript handling (ASR → Planning Agent)
+    # ------------------------------------------------------------------
+
+    async def handle_transcript(self, transcript: str) -> None:
+        """Route a voice transcript from ASR to the Planning Agent.
+
+        This is the callback used by :func:`asr_loop` when Parakeet
+        produces a non-empty transcription.
+        """
+        if not transcript.strip():
+            return
+
+        logger.info("Transcript received: %s", transcript[:120])
+
+        # Push transcript to the iPhone HUD.
+        if self._on_status:
+            snap = self.state.get_snapshot()
+            await self._on_status(
+                "TRANSCRIPT",
+                transcript,
+                snap.mode,
+                snap.active_goal,
+            )
+
+        if self.planning_agent is None:
+            logger.warning("No planning agent attached — cannot process transcript")
+            return
+
+        planning_response = await self.planning_agent.process(
+            {"transcript": transcript}
+        )
+        await self.handle_planning_response(planning_response)
+
+    # ------------------------------------------------------------------
     # Ambient processing loop
     # ------------------------------------------------------------------
 
     async def run_ambient_loop(self) -> None:
         """Continuous frame-processing loop for the Ambient Agent.
 
-        Pulls the latest frame from the buffer, runs it through the
-        Ambient Agent, and routes the response.  Runs until cancelled.
+        Only processes the **latest** frame and skips if it hasn't changed
+        since the last inference (same timestamp).  This ensures the model
+        always sees the freshest view and never re-processes stale frames.
 
-        The loop is naturally throttled by NIM inference latency (~250-500ms
-        per frame on Cosmos Reason2-8B), yielding ~2-4 FPS.
+        The loop is naturally throttled by NIM inference latency (~1-3s
+        per frame on Cosmos Reason2-8B).
         """
+        import time as _time
+
         if self.ambient_agent is None or self.frame_buffer is None:
             logger.warning("Ambient loop requires ambient_agent and frame_buffer")
             return
 
         logger.info("Ambient processing loop started")
+        frame_num = 0
+        last_ts = 0.0  # timestamp of the last frame we processed
+
         while True:
-            frame = self.frame_buffer.latest_base64()
-            if frame is None:
+            # Grab the freshest frame.
+            frame_obj = self.frame_buffer.latest()
+            if frame_obj is None:
                 await asyncio.sleep(0.1)  # no frames yet — back off
                 continue
 
+            # Skip if we already processed this exact frame.
+            if frame_obj.timestamp <= last_ts:
+                await asyncio.sleep(0.05)  # wait for a new frame
+                continue
+
+            last_ts = frame_obj.timestamp
+            frame_num += 1
+
+            # Re-grab the absolute latest right before inference
+            # (a newer frame may have arrived while we were awaiting).
+            fresh = self.frame_buffer.latest()
+            if fresh is not None and fresh.timestamp > last_ts:
+                frame_obj = fresh
+                last_ts = fresh.timestamp
+
+            import base64
+            frame_b64 = base64.b64encode(frame_obj.jpeg).decode("ascii")
+
+            t0 = _time.time()
             try:
                 response = await self.ambient_agent.process(
-                    {"frame_base64": frame}
+                    {"frame_base64": frame_b64}
+                )
+                dt = round((_time.time() - t0) * 1000)
+                snap = self.state.get_snapshot()
+                logger.info(
+                    "[Ambient #%d] %s | %dms | mode=%s | goal=%s | msg=%s",
+                    frame_num,
+                    response.signal,
+                    dt,
+                    snap.mode,
+                    (snap.active_goal or "-")[:40],
+                    (response.message or "-")[:60],
                 )
                 await self.handle_ambient_response(response)
             except Exception:
-                logger.exception("Error in ambient loop iteration")
+                logger.exception("Error in ambient loop iteration #%d", frame_num)
 
-            # Yield to the event loop.  No explicit FPS cap — inference
-            # latency is the natural governor.
+            # Yield to the event loop.
             await asyncio.sleep(0)
 
     # ------------------------------------------------------------------
@@ -265,10 +344,11 @@ class Orchestrator:
         if self._on_status is None:
             return
         snap = self.state.get_snapshot()
+        # Ensure signal is a plain string (not StrEnum) for JSON serialization.
         await self._on_status(
-            response.signal,
+            str(response.signal),
             response.message or None,
-            snap.mode,
+            str(snap.mode),
             snap.active_goal,
         )
 

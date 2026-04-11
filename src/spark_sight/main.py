@@ -1,7 +1,12 @@
 """Spark Sight — main entry point.
 
 Wires up the Orchestrator, Ambient and Planning agents, the FrameBuffer,
-and the FastAPI server, then starts uvicorn.
+TTS (Magpie), ASR (Parakeet), and the FastAPI server, then starts uvicorn.
+
+Full data flow:
+  iPhone camera  → WebSocket → FrameBuffer → AmbientAgent → Orchestrator
+  iPhone mic     → WebSocket → audio_queue → ASR loop → Orchestrator → PlanningAgent
+  Speech queue   → TTS loop  → Magpie NIM  → tts_queue → WebSocket → iPhone speaker
 """
 
 from __future__ import annotations
@@ -9,6 +14,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+from contextlib import asynccontextmanager
 
 import uvicorn
 
@@ -18,6 +24,8 @@ from spark_sight.bridge.orchestrator import Orchestrator
 from spark_sight.bridge.prompt_state import PromptState
 from spark_sight.server.app import create_app
 from spark_sight.server.frame_buffer import FrameBuffer
+from spark_sight.speech.asr import ASRClient, asr_loop
+from spark_sight.speech.tts import TTSClient, tts_loop
 
 logging.basicConfig(
     level=logging.INFO,
@@ -36,8 +44,12 @@ def build_app(*, debug: bool = False):
     ambient = AmbientAgent(state)
     planning = PlanningAgent(state)
 
-    # Server (creates its own queues)
-    app = create_app(frame_buffer, debug=debug)
+    # Speech clients
+    tts_client = TTSClient()
+    asr_client = ASRClient()
+
+    # Server (creates its own queues) — lifespan handles startup/shutdown.
+    app = create_app(frame_buffer, debug=debug, lifespan=_lifespan)
 
     # Orchestrator — wired to server callbacks for push notifications.
     orchestrator = Orchestrator(
@@ -45,7 +57,6 @@ def build_app(*, debug: bool = False):
         ambient_agent=ambient,
         planning_agent=planning,
         frame_buffer=frame_buffer,
-        on_speech=None,  # TTS not yet wired
         on_status=app.state.push_status,
     )
 
@@ -54,34 +65,55 @@ def build_app(*, debug: bool = False):
     app.state.ambient_agent = ambient
     app.state.planning_agent = planning
     app.state.prompt_state = state
+    app.state.tts_client = tts_client
+    app.state.asr_client = asr_client
 
-    # Background task handle for the ambient loop.
-    app.state._ambient_loop_task: asyncio.Task | None = None
+    return app
 
-    @app.on_event("startup")
-    async def startup() -> None:
-        await ambient.start()
-        await planning.start()
-        # Start the continuous ambient frame-processing loop.
-        app.state._ambient_loop_task = asyncio.create_task(
-            orchestrator.run_ambient_loop()
-        )
-        logger.info("Spark Sight started — agents live, server ready")
 
-    @app.on_event("shutdown")
-    async def shutdown() -> None:
-        # Stop the ambient loop.
-        if app.state._ambient_loop_task is not None:
-            app.state._ambient_loop_task.cancel()
+@asynccontextmanager
+async def _lifespan(app):
+    """Start/stop agents and background loops."""
+    ambient = app.state.ambient_agent
+    planning = app.state.planning_agent
+    tts_client = app.state.tts_client
+    asr_client = app.state.asr_client
+    orchestrator = app.state.orchestrator
+
+    # Start all clients.
+    await ambient.start()
+    await planning.start()
+    await tts_client.start()
+    await asr_client.start()
+
+    # Start background loops.
+    bg_tasks = [
+        asyncio.create_task(orchestrator.run_ambient_loop(), name="ambient-loop"),
+        asyncio.create_task(
+            tts_loop(orchestrator, tts_client, app.state.tts_queue), name="tts-loop",
+        ),
+        asyncio.create_task(
+            asr_loop(app.state.audio_queue, asr_client, orchestrator.handle_transcript),
+            name="asr-loop",
+        ),
+    ]
+
+    logger.info("Spark Sight started — agents live, TTS/ASR active, server ready")
+    try:
+        yield
+    finally:
+        for task in bg_tasks:
+            task.cancel()
+        for task in bg_tasks:
             try:
-                await app.state._ambient_loop_task
+                await task
             except asyncio.CancelledError:
                 pass
+        await asr_client.stop()
+        await tts_client.stop()
         await ambient.stop()
         await planning.stop()
         logger.info("Spark Sight shut down")
-
-    return app
 
 
 def main() -> None:

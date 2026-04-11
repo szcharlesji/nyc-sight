@@ -1,11 +1,13 @@
-"""Planning Agent — intent parser & route planner powered by Nemotron Super 120B.
+"""Planning Agent — intent parser & route planner powered by Nemotron-3-Nano-30B.
 
-This module contains the agent stub.  Actual NIM inference is behind a
-placeholder that will be wired to a local Nemotron Super NIM endpoint.
+Parses user voice transcripts and FAILURE replan triggers via the
+Nemotron NIM endpoint (OpenAI-compatible API).  Returns a structured
+``PlanningResponse`` with an action and optional speech/goal.
 """
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -14,32 +16,62 @@ from openai import AsyncOpenAI
 from spark_sight.agents.base import BaseAgent
 from spark_sight.bridge.models import PlanningAction, PlanningResponse
 from spark_sight.bridge.prompt_state import PromptState
+from spark_sight.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Default NIM endpoint for Nemotron running locally on the GB10.
-# Port 8005 matches the Docker startup script (cos_nemo_docker.sh).
-_DEFAULT_NIM_BASE_URL = "http://localhost:8005/v1"
-_DEFAULT_MODEL = "nemotron-nano"
+_settings = get_settings()
+_DEFAULT_NIM_BASE_URL = _settings.nemotron.nim_url
+_DEFAULT_MODEL = _settings.nemotron.model
 
 _SYSTEM_PROMPT = """\
 You are the Planning Agent for Spark Sight, an accessibility assistant for \
 visually impaired users navigating New York City.
 
 You receive the user's spoken request (transcribed) and the current system state.
-You must decide on ONE action and return a JSON object with these fields:
+You must decide on ONE action and respond with EXACTLY ONE JSON object.
 
-  action:         one of "set_goal", "inspect", "answer", "reset", "replan"
-  message:        text to speak to the user (empty string if silent)
-  goal:           new goal text (only for set_goal / replan, else null)
-  nyc_context:    NYC data context string (only for set_goal / replan, else null)
-  inspect_prompt: one-shot prompt for the Ambient Agent (only for inspect, else null)
+IMPORTANT: Output ONLY the JSON object. No thinking, no explanation, no \
+markdown fences. Just the raw JSON.
 
-Available tools (call via function_call):
-  - nyc_accessibility_lookup(lat, lon, radius_m) → nearby accessibility data
-  - set_ambient_goal(goal, nyc_context) → updates the Ambient Agent's prompt
-  - reset_ambient_goal() → clears the Ambient Agent's goal
-  - web_search(query) → web search (only when WiFi available)
+{
+  "action": "<ACTION>",
+  "message": "<text to speak to the user, or empty string>",
+  "goal": "<new goal text or null>",
+  "nyc_context": "<NYC data context string or null>",
+  "inspect_prompt": "<one-shot visual question or null>"
+}
+
+ACTION must be one of:
+- set_goal: Program the Ambient Agent with a CONTINUOUS monitoring goal. \
+The Ambient Agent will evaluate EVERY camera frame against this goal and \
+report PROGRESS, WARNING, CORRECTION, GOAL_REACHED, or FAILURE. Use this \
+for navigation ("take me to the subway"), watching for something ("tell me \
+when you see a face", "warn me about obstacles"), or any ongoing task. \
+Provide goal (clear instruction for the Ambient Agent) and optionally \
+nyc_context. message should confirm to the user.
+- inspect: One-shot visual question — look at the CURRENT camera frame \
+RIGHT NOW and answer a question. Use ONLY for immediate queries like \
+"what do you see?", "read that sign", "is there a door ahead?". \
+Provide inspect_prompt. Does NOT persist — the Ambient Agent returns to \
+its previous mode after answering.
+- answer: Answer the user directly without vision. Only message is needed.
+- reset: Clear the current goal. The Ambient Agent reverts to Patrol Mode.
+- replan: Create a new goal after a FAILURE signal. Provide goal and message.
+
+Rules:
+1. If the user wants CONTINUOUS monitoring or to be notified about something \
+("remind me", "tell me when", "watch for", "warn me", "guide me"), use \
+"set_goal". The goal text should be a clear instruction for the Ambient \
+Agent describing what to watch for and when to signal.
+2. If the user asks a ONE-TIME visual question about what's in front of them \
+right now ("what do you see?", "read that sign"), use "inspect".
+3. If the user wants to go somewhere or navigate, use "set_goal".
+4. If the user says "cancel", "stop", or "never mind", use "reset".
+5. If the input is a failure reason (from the Ambient Agent), use "replan".
+6. For general questions not requiring vision, use "answer".
+7. Messages must be concise (1-2 sentences), spoken aloud to a blind person.
+8. Output valid JSON only. No markdown, no explanation outside the JSON.
 """
 
 
@@ -110,43 +142,94 @@ class PlanningAgent(BaseAgent):
             return PlanningResponse(action=PlanningAction.ANSWER)
 
         # Build context from current state.
-        _state_snapshot = self._state.get_snapshot()  # used by NIM inference
+        state_snapshot = self._state.get_snapshot()
 
         if self._client is None:
-            # Stub: echo back a placeholder answer.
             logger.debug("Planning processed (stub): %s", trigger[:80])
             return PlanningResponse(
                 action=PlanningAction.ANSWER,
                 message=f"I heard: {trigger}. (Planning Agent stub — NIM not connected.)",
             )
 
-        # ----- NIM inference (placeholder) ------------------------------------
-        # When Nemotron Super NIM is running, this will send the transcript
-        # along with system state and parse the structured JSON response.
-        #
-        # messages = [
-        #     {"role": "system", "content": _SYSTEM_PROMPT},
-        #     {
-        #         "role": "user",
-        #         "content": (
-        #             f"User said: {trigger}\n\n"
-        #             f"Current mode: {state_snapshot.mode}\n"
-        #             f"Active goal: {state_snapshot.active_goal or 'none'}\n"
-        #             f"NYC context: {state_snapshot.nyc_context or 'none'}"
-        #         ),
-        #     },
-        # ]
-        # response = await self._client.chat.completions.create(
-        #     model=self._model,
-        #     messages=messages,
-        #     response_format={"type": "json_object"},
-        #     max_tokens=512,
-        # )
-        # return self._parse_response(response)
-        # ----------------------------------------------------------------------
+        # Construct the user message with trigger + current system state.
+        if failure_reason:
+            user_content = (
+                f"The Ambient Agent reported FAILURE: {failure_reason}\n\n"
+                f"Current mode: {state_snapshot.mode}\n"
+                f"Previous goal: {state_snapshot.active_goal or 'none'}\n"
+                f"NYC context: {state_snapshot.nyc_context or 'none'}\n\n"
+                f"Please replan with an alternative approach."
+            )
+        else:
+            user_content = (
+                f"User said: {transcript}\n\n"
+                f"Current mode: {state_snapshot.mode}\n"
+                f"Active goal: {state_snapshot.active_goal or 'none'}\n"
+                f"NYC context: {state_snapshot.nyc_context or 'none'}"
+            )
 
-        logger.debug("Planning processed (stub): %s", trigger[:80])
-        return PlanningResponse(
-            action=PlanningAction.ANSWER,
-            message=f"I heard: {trigger}. (Planning Agent stub — NIM not connected.)",
-        )
+        try:
+            response = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": _SYSTEM_PROMPT},
+                    {"role": "user", "content": user_content},
+                ],
+                max_tokens=512,
+                temperature=0.2,
+            )
+            return self._parse_response(response)
+        except Exception:
+            logger.exception("NIM inference failed for PlanningAgent")
+            return PlanningResponse(
+                action=PlanningAction.ANSWER,
+                message="Sorry, I'm having trouble processing that right now.",
+            )
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _strip_think(text: str) -> str:
+        """Remove chain-of-thought reasoning from model output.
+
+        Nemotron-3-Nano-30B emits thinking text that may or may not be
+        wrapped in ``<think>`` tags.  Handles both cases:
+        - ``<think>...reasoning...</think>{json}``
+        - ``...reasoning...\n</think>\n{json}``  (no opening tag)
+        """
+        import re
+        # Case 1: proper <think>...</think> tags.
+        text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        # Case 2: no opening tag — everything before </think> is thinking.
+        if "</think>" in text:
+            text = text.split("</think>", 1)[1].strip()
+        return text
+
+    def _parse_response(self, response: Any) -> PlanningResponse:
+        """Parse a NIM chat completion into a :class:`PlanningResponse`."""
+        raw: str = response.choices[0].message.content or ""
+        raw = self._strip_think(raw)
+
+        # LLMs sometimes wrap JSON in markdown code fences.
+        if raw.startswith("```"):
+            raw = raw.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+
+        try:
+            data = json.loads(raw)
+            action = PlanningAction(data.get("action", "answer"))
+            return PlanningResponse(
+                action=action,
+                message=data.get("message", ""),
+                goal=data.get("goal"),
+                nyc_context=data.get("nyc_context"),
+                inspect_prompt=data.get("inspect_prompt"),
+            )
+        except (json.JSONDecodeError, ValueError, KeyError):
+            logger.warning("Failed to parse Planning response: %s", raw[:200])
+            # Fall back to treating the raw text as a direct answer.
+            return PlanningResponse(
+                action=PlanningAction.ANSWER,
+                message=raw[:200] if raw else "I couldn't understand that.",
+            )
