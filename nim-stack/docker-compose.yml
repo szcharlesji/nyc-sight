@@ -144,8 +144,8 @@ services:
       # Riva NIMs accept custom internal ports (unlike vLLM's fixed 8000)
       - NIM_HTTP_API_PORT=9000
       - NIM_GRPC_API_PORT=50051
-      # Select the Magpie Multilingual TTS model
-      - NIM_TAGS_SELECTOR=name=magpie-tts-multilingual
+      # Select the Magpie Multilingual TTS model; prebuilt skips TRT compilation
+      - NIM_TAGS_SELECTOR=name=magpie-tts-multilingual,model_type=prebuilt
     deploy:
       resources:
         reservations:
@@ -183,8 +183,8 @@ services:
       - NGC_API_KEY=${NGC_API_KEY}
       - NIM_HTTP_API_PORT=9001
       - NIM_GRPC_API_PORT=50052
-      # Streaming transcription mode
-      - NIM_TAGS_SELECTOR=mode=str
+      # Streaming transcription mode; prebuilt skips TRT compilation
+      - NIM_TAGS_SELECTOR=mode=str,model_type=prebuilt
     deploy:
       resources:
         reservations:
