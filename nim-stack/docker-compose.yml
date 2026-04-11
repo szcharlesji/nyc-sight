@@ -1,0 +1,201 @@
+# =============================================================================
+# NIM Stack — Docker Compose for DGX Spark (GB10, SM121, 128GB)
+#
+# Four NVIDIA NIM containers:
+#   1. Nemotron-3-Nano-30B  (LLM)  — port 8005
+#   2. Cosmos-Reason2-8B    (VLM)  — port 8000
+#   3. Magpie TTS           (TTS)  — port 9000 (HTTP), 50051 (gRPC)
+#   4. Parakeet ASR         (ASR)  — port 9001 (HTTP), 50052 (gRPC)
+#
+# IMPORTANT: Do NOT run `docker compose up` directly. Use start.sh for
+# sequential startup — concurrent vLLM launches cause GPU memory profiling
+# race conditions (AssertionError: free memory increased during profiling).
+#
+# Total GPU budget: ~95-103GB of 128GB available.
+# =============================================================================
+
+networks:
+  nim-net:
+    driver: bridge
+
+services:
+  # ---------------------------------------------------------------------------
+  # Nemotron-3-Nano-30B (LLM) — ~44GB GPU
+  #
+  # Uses model-free-nim (generic NIM runtime) with local NVFP4 weights.
+  # The `command:` directive passes the model path + --trust-remote-code
+  # because model-free-nim expects the model path as a CLI argument.
+  #
+  # VLLM_USE_FLASHINFER_MOE_FP4=0 disables flashinfer's MoE FP4 kernel
+  # which crashes with CUDA graph errors on GB10 (flashinfer issue #2776).
+  # ---------------------------------------------------------------------------
+  nemotron:
+    container_name: nemotron-nano
+    image: ${NEMOTRON_IMAGE:-nvcr.io/nim/nvidia/model-free-nim:2.0.2}
+    runtime: nvidia
+    shm_size: "16gb"
+    restart: unless-stopped
+    ports:
+      # Internal port is always 8000 for vLLM NIMs; remap to host port
+      - "${NEMOTRON_PORT:-8005}:8000"
+    volumes:
+      # Shared NIM cache — all containers read/write model artifacts here
+      - ${LOCAL_NIM_CACHE:-~/.cache/nim}:/opt/nim/.cache
+      # Local model weights directory (pre-downloaded NVFP4 checkpoint)
+      - ${NEMOTRON_MODEL_PATH:-~/Downloads/models/llm}:/mnt/models
+    environment:
+      - NGC_API_KEY=${NGC_API_KEY}
+      # Path inside container where model-free-nim finds the weights
+      - NIM_MODEL_PATH=/mnt/models/${NEMOTRON_MODEL_SUBDIR:-nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4}
+      # Model name returned by /v1/models and expected in API requests
+      - NIM_SERVED_MODEL_NAME=${NEMOTRON_MODEL_NAME:-nemotron-nano}
+      # KV cache budget: 0.35 = ~17GB on GB10 with this model
+      - NIM_KVCACHE_PERCENT=${NEMOTRON_KVCACHE_PERCENT:-0.35}
+      # Context window cap — default (131072) blows KV cache budget
+      - NIM_MAX_MODEL_LEN=${NEMOTRON_MAX_MODEL_LEN:-32768}
+      # Disable flashinfer MoE FP4 kernel — CUDA graph crash on GB10/SM121
+      # See: https://github.com/flashinfer-ai/flashinfer/issues/2776
+      - VLLM_USE_FLASHINFER_MOE_FP4=0
+    # model-free-nim entrypoint expects model path + flags as CLI arguments
+    command:
+      - /mnt/models/${NEMOTRON_MODEL_SUBDIR:-nvidia--NVIDIA-Nemotron-3-Nano-30B-A3B-NVFP4}
+      - --trust-remote-code
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - nim-net
+
+  # ---------------------------------------------------------------------------
+  # Cosmos-Reason2-8B (VLM) — ~44GB GPU
+  #
+  # Runs as host UID for NIM cache write permissions (bind mount ownership).
+  # NIM_MODEL_PROFILE forces bf16 — FP8 produces numerically incorrect output
+  # on SM121 / GB10 (garbage tokens, wrong logprobs).
+  # ---------------------------------------------------------------------------
+  cosmos:
+    container_name: cosmos-reason2-8b
+    image: ${COSMOS_IMAGE:-nvcr.io/nim/nvidia/cosmos-reason2-8b:1.6.0}
+    runtime: nvidia
+    # Run as host user so Cosmos can write to the bind-mounted NIM cache.
+    # start.sh exports HOST_UID=$(id -u) before invoking compose.
+    user: "${HOST_UID:-1000}"
+    shm_size: "16gb"
+    restart: unless-stopped
+    ports:
+      - "${COSMOS_PORT:-8000}:8000"
+    volumes:
+      - ${LOCAL_NIM_CACHE:-~/.cache/nim}:/opt/nim/.cache
+    environment:
+      - NGC_API_KEY=${NGC_API_KEY}
+      # Force bf16 model profile — FP8 is broken on SM121
+      - NIM_MODEL_PROFILE=${COSMOS_BF16_PROFILE:-3266ed3ec2297386d2e4a94e6c84a5b0ba92244f787c538f33577c4c78c5aef2}
+      - NIM_KVCACHE_PERCENT=${COSMOS_KVCACHE_PERCENT:-0.35}
+      # Default max_model_len (262144) needs 36GB KV alone — cap to 16384
+      - NIM_MAX_MODEL_LEN=${COSMOS_MAX_MODEL_LEN:-16384}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - nim-net
+
+  # ---------------------------------------------------------------------------
+  # Magpie TTS Multilingual — ~11GB GPU
+  #
+  # Riva-based NIM. Uses NIM_HTTP_API_PORT / NIM_GRPC_API_PORT to set internal
+  # listening ports (unlike vLLM NIMs which always listen on 8000).
+  # NIM_TAGS_SELECTOR chooses the Magpie Multilingual voice model.
+  #
+  # First run downloads models + compiles TensorRT engines (~15-30 min).
+  # Max 5 concurrent synthesis streams for Magpie Multilingual.
+  # No user override needed — Riva containers manage their own user.
+  # ---------------------------------------------------------------------------
+  magpie-tts:
+    container_name: magpie-tts
+    image: ${MAGPIE_IMAGE:-nvcr.io/nim/nvidia/magpie-tts-multilingual:latest}
+    runtime: nvidia
+    shm_size: "8gb"
+    restart: unless-stopped
+    ports:
+      - "${MAGPIE_HTTP_PORT:-9000}:9000"
+      - "${MAGPIE_GRPC_PORT:-50051}:50051"
+    volumes:
+      - ${LOCAL_NIM_CACHE:-~/.cache/nim}:/opt/nim/.cache
+    environment:
+      - NGC_API_KEY=${NGC_API_KEY}
+      # Riva NIMs accept custom internal ports (unlike vLLM's fixed 8000)
+      - NIM_HTTP_API_PORT=9000
+      - NIM_GRPC_API_PORT=50051
+      # Select the Magpie Multilingual TTS model
+      - NIM_TAGS_SELECTOR=name=magpie-tts-multilingual
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - nim-net
+
+  # ---------------------------------------------------------------------------
+  # Parakeet 1.1B RNNT Multilingual ASR — ~2-4GB GPU
+  #
+  # Lightweight Riva ASR NIM. 25 languages with auto language detection.
+  # NIM_TAGS_SELECTOR=mode=str selects streaming transcription mode.
+  # Same first-run TRT compilation delay as Magpie TTS.
+  # ---------------------------------------------------------------------------
+  parakeet-asr:
+    container_name: parakeet-asr
+    image: ${PARAKEET_IMAGE:-nvcr.io/nim/nvidia/parakeet-1-1b-rnnt-multilingual:latest}
+    runtime: nvidia
+    shm_size: "8gb"
+    restart: unless-stopped
+    ports:
+      - "${PARAKEET_HTTP_PORT:-9001}:9001"
+      - "${PARAKEET_GRPC_PORT:-50052}:50052"
+    volumes:
+      - ${LOCAL_NIM_CACHE:-~/.cache/nim}:/opt/nim/.cache
+    environment:
+      - NGC_API_KEY=${NGC_API_KEY}
+      - NIM_HTTP_API_PORT=9001
+      - NIM_GRPC_API_PORT=50052
+      # Streaming transcription mode
+      - NIM_TAGS_SELECTOR=mode=str
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    networks:
+      - nim-net
