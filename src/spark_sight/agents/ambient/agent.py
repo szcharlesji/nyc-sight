@@ -16,12 +16,13 @@ from openai import AsyncOpenAI
 from spark_sight.agents.base import BaseAgent
 from spark_sight.bridge.models import AmbientResponse, AmbientSignal
 from spark_sight.bridge.prompt_state import PromptState
+from spark_sight.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Default NIM endpoint for Cosmos Reason2 running locally on the GB10.
-_DEFAULT_NIM_BASE_URL = "http://localhost:8000/v1"
-_DEFAULT_MODEL = "nvidia/cosmos-reason2-8b"
+_settings = get_settings()
+_DEFAULT_NIM_BASE_URL = _settings.cosmos.nim_url
+_DEFAULT_MODEL = _settings.cosmos.model
 
 # ---------------------------------------------------------------------------
 # System prompts

@@ -14,13 +14,13 @@ from openai import AsyncOpenAI
 from spark_sight.agents.base import BaseAgent
 from spark_sight.bridge.models import PlanningAction, PlanningResponse
 from spark_sight.bridge.prompt_state import PromptState
+from spark_sight.config import get_settings
 
 logger = logging.getLogger(__name__)
 
-# Default NIM endpoint for Nemotron running locally on the GB10.
-# Port 8005 matches the Docker startup script (cos_nemo_docker.sh).
-_DEFAULT_NIM_BASE_URL = "http://localhost:8005/v1"
-_DEFAULT_MODEL = "nemotron-nano"
+_settings = get_settings()
+_DEFAULT_NIM_BASE_URL = _settings.nemotron.nim_url
+_DEFAULT_MODEL = _settings.nemotron.model
 
 _SYSTEM_PROMPT = """\
 You are the Planning Agent for Spark Sight, an accessibility assistant for \
