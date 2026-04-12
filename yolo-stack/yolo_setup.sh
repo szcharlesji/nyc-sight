@@ -3,7 +3,7 @@
 
 set -e
 
-IMAGE="sparksight:ready"
+IMAGE="sparksight:yolo"
 CONTAINER_NAME="yolo-server"
 WORKSPACE="$HOME/docker_workspace"   # remap to your actual project root if different
 PORT=8081
