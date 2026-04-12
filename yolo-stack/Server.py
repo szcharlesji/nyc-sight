@@ -31,6 +31,7 @@ import base64
 import io
 import re
 import time
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Optional
@@ -130,6 +131,12 @@ class _ThrottleState:
 _throttle = _ThrottleState()
 
 _LEVEL_RANK = {"CLEAR": 0, "CAUTION": 1, "WARNING": 2, "CRITICAL": 3}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Frame summary cache  (last 10 frames, newest last)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_frame_cache: deque[dict] = deque(maxlen=10)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -327,6 +334,16 @@ def run_detection(img: Image.Image) -> dict:
 
     latency_ms = round((time.perf_counter() - t0) * 1000, 1)
 
+    # ── Update frame cache ────────────────────────────────────────────────────
+    _frame_cache.append({
+        "ts":            round(time.time(), 3),
+        "classes":       sorted({d["class"] for d in detections}),
+        "warning_level": best["level"]      if best else "CLEAR",
+        "zone":          best["zone"]       if best else "NONE",
+        "closest_m":     best["distance_m"] if best else None,
+        "interrupted":   should_interrupt,
+    })
+
     return {
         "objects":          detections,
         "warning_level":    best["level"]      if best else "CLEAR",
@@ -335,6 +352,7 @@ def run_detection(img: Image.Image) -> dict:
         "warning_text":     warning_text,
         "closest_m":        best["distance_m"] if best else None,
         "latency_ms":       latency_ms,
+        "recent_frames":    list(_frame_cache),
     }
 
 
