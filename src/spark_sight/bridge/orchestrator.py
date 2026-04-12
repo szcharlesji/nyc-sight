@@ -26,6 +26,7 @@ from spark_sight.bridge.prompt_state import PromptState
 if TYPE_CHECKING:
     from spark_sight.agents.ambient import AmbientAgent
     from spark_sight.agents.base import BaseAgent
+    from spark_sight.agents.warning import WarningAgent
     from spark_sight.server.frame_buffer import FrameBuffer
 
 logger = logging.getLogger(__name__)
@@ -75,6 +76,7 @@ class Orchestrator:
         ambient_agent: AmbientAgent | None = None,
         planning_agent: BaseAgent | None = None,
         frame_buffer: FrameBuffer | None = None,
+        warning_agent: WarningAgent | None = None,
         *,
         on_speech: SpeechCallback | None = None,
         on_status: StatusCallback | None = None,
@@ -83,6 +85,7 @@ class Orchestrator:
         self.ambient_agent = ambient_agent
         self.planning_agent = planning_agent
         self.frame_buffer = frame_buffer
+        self.warning_agent = warning_agent
 
         # External callbacks (registered by the server layer).
         self._on_speech = on_speech
@@ -323,6 +326,50 @@ class Orchestrator:
             elapsed = _time.time() - t0
             if elapsed < 4.0:
                 await asyncio.sleep(4.0 - elapsed)
+
+    # ------------------------------------------------------------------
+    # Warning loop (YOLO — fast, parallel to ambient loop)
+    # ------------------------------------------------------------------
+
+    async def run_warning_loop(self) -> None:
+        """Fast obstacle-detection loop powered by the YOLO11 service.
+
+        Runs in parallel with :meth:`run_ambient_loop`.  Processes every new
+        frame at up to ~10 fps (capped by a 0.1 s sleep).  Only forwards
+        WARNING signals — CLEAR responses are discarded silently.
+
+        Gracefully no-ops if the YOLO service is unreachable.
+        """
+        import base64 as _base64
+
+        if self.warning_agent is None or self.frame_buffer is None:
+            logger.warning("Warning loop requires warning_agent and frame_buffer")
+            return
+
+        logger.info("Warning loop started")
+        last_ts = 0.0
+
+        while True:
+            frame_obj = self.frame_buffer.latest()
+            if frame_obj is None:
+                await asyncio.sleep(0.1)
+                continue
+
+            if frame_obj.timestamp <= last_ts:
+                await asyncio.sleep(0.5)
+                continue
+
+            last_ts = frame_obj.timestamp
+            frame_b64 = _base64.b64encode(frame_obj.jpeg).decode("ascii")
+
+            try:
+                response = await self.warning_agent.process({"frame_base64": frame_b64})
+                if response.signal != AmbientSignal.CLEAR:
+                    await self.handle_ambient_response(response)
+            except Exception:
+                logger.exception("Error in warning loop")
+
+            await asyncio.sleep(0.5)  # 2 fps
 
     # ------------------------------------------------------------------
     # Speech

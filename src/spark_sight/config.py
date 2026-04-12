@@ -39,11 +39,20 @@ class NemotronSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class YoloSettings:
+    """YOLO11 Warning Service — local FastAPI + TRT inference."""
+
+    nim_url: str = field(default_factory=lambda: _env("YOLO_NIM_URL", "http://localhost:8080/v1"))
+    model: str = field(default_factory=lambda: _env("YOLO_MODEL", "yolo11n-warning"))
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     """Top-level settings container for NIM models."""
 
     cosmos: CosmosSettings = field(default_factory=CosmosSettings)
     nemotron: NemotronSettings = field(default_factory=NemotronSettings)
+    yolo: YoloSettings = field(default_factory=YoloSettings)
 
 
 def get_settings() -> Settings:
