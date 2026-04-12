@@ -19,6 +19,11 @@ Spark Sight runs across three devices: the **DGX Spark (GB10)** hosts all AI mod
 ### 1. DGX Spark — Model Backend
 
 **a. vLLM / NIM containers**
+Configure models and API keys first:
+
+```bash
+bash scripts/gemma4_vllm_setup.sh
+```
 
 Configure models and API keys first — see [How to reproduce the demo](#how-to-reproduce-the-demo-env-vars-api-keys-sample-env) for required env vars. Then:
 
