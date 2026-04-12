@@ -39,11 +39,19 @@ class NemotronSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class ClosureSettings:
+    """Street closure data server."""
+
+    server_url: str = field(default_factory=lambda: _env("CLOSURE_SERVER_URL", "http://localhost:8010"))
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     """Top-level settings container for NIM models."""
 
     cosmos: CosmosSettings = field(default_factory=CosmosSettings)
     nemotron: NemotronSettings = field(default_factory=NemotronSettings)
+    closure: ClosureSettings = field(default_factory=ClosureSettings)
 
 
 def get_settings() -> Settings:
