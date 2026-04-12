@@ -21,6 +21,58 @@ Four NVIDIA models. All multilingual. One device. Zero compromise on privacy. De
 
 ---
 
+## Quick Start
+
+Spark Sight runs across three devices: the **DGX Spark (GB10)** hosts all AI models and data services, the **laptop** runs the orchestration layer, and an **iPhone** provides the live camera feed.
+
+### 1. DGX Spark — Model Backend
+
+**a. vLLM / NIM containers**
+
+Configure models and API keys first — see [How to reproduce the demo](#how-to-reproduce-the-demo-env-vars-api-keys-sample-env) for required env vars. Then:
+
+```bash
+cd nim-stack
+./start.sh          # launches Nemotron, Cosmos, Magpie TTS, Parakeet ASR sequentially
+./healthcheck.sh    # verify all four services are up
+```
+
+**b. YOLO detection service**
+
+Go to the `yolo-stack` 
+
+```bash
+pip install ultralytics
+
+yolo export model=yolo11n.pt format=engine half=True imgsz=640 device=0
+
+python server.py
+```
+
+**c. Street closure data server**
+
+```bash
+# Install dependencies (first time only)
+pip install fastapi uvicorn pandas
+
+cd closure-data
+python server.py
+# → listening on http://0.0.0.0:8010
+```
+
+### 2. Laptop — Orchestrator
+
+```bash
+uv run python -m spark_sight.main --debug
+# → note the URL/port printed to the console
+```
+
+### 3. iPhone — Camera
+
+Open the URL printed by the laptop in Safari and grant camera access when prompted.
+
+---
+
 ## How It Works
 
 The user wears a chest-mounted iPhone in a MagSafe holder and headphones. They walk normally, speak naturally, and hear spoken responses.
