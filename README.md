@@ -27,7 +27,7 @@ bash scripts/gemma4_vllm_setup.sh
 
 **b. YOLO detection service**
 
-Go to the `yolo-stack`
+Go to the `yolo-stack`, you may need ONNX and TensorRT
 
 ```bash
 pip install ultralytics
