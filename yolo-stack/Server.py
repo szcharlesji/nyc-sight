@@ -298,7 +298,10 @@ def run_detection(img: Image.Image) -> dict:
     if best:
         should_interrupt = _can_interrupt(best["zone"], best["level"])
         if should_interrupt:
-            warning_text = build_warning_text(best["level"], best["distance_m"], best["class"])
+            # proximity objects were detected only because they're very close
+            # straight ahead — use a generic label instead of the raw COCO class name.
+            obj_label = "obstacle directly ahead" if best["category"] == "proximity" else best["class"]
+            warning_text = build_warning_text(best["level"], best["distance_m"], obj_label)
 
     latency_ms = round((time.perf_counter() - t0) * 1000, 1)
 
