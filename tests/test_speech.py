@@ -1,21 +1,17 @@
-"""Tests for the speech modules: TTS (Magpie) and ASR (Parakeet)."""
+"""Tests for the speech modules: TTS (Kokoro) and ASR (Parakeet-EOU)."""
 
 from __future__ import annotations
 
 import asyncio
 import struct
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from spark_sight.speech.asr import (
     ASRClient,
-    _rms_energy,
-    pcm_to_wav,
+    _i16le_to_f32le,
     asr_loop,
-    _ENERGY_THRESHOLD,
-    _SILENCE_CHUNKS_TO_END,
-    _MIN_SPEECH_CHUNKS,
 )
 from spark_sight.speech.tts import TTSClient, tts_loop
 from spark_sight.bridge.orchestrator import Orchestrator, SpeechPriority
@@ -23,48 +19,34 @@ from spark_sight.bridge.prompt_state import PromptState
 
 
 # ---------------------------------------------------------------------------
-# pcm_to_wav
+# _i16le_to_f32le
 # ---------------------------------------------------------------------------
 
 
-class TestPcmToWav:
-    def test_produces_valid_wav_header(self) -> None:
-        pcm = b"\x00" * 8192
-        wav = pcm_to_wav(pcm)
-        assert wav[:4] == b"RIFF"
-        assert wav[8:12] == b"WAVE"
+class TestI16ToF32:
+    def test_silence_converts_to_zeros(self) -> None:
+        pcm_i16 = b"\x00" * 4096  # 2048 zero samples
+        pcm_f32 = _i16le_to_f32le(pcm_i16)
+        # f32le: 4 bytes per sample, so 2048 * 4 = 8192 bytes
+        assert len(pcm_f32) == 8192
+        samples = struct.unpack(f"<{len(pcm_f32) // 4}f", pcm_f32)
+        assert all(s == 0.0 for s in samples)
 
-    def test_wav_contains_pcm_data(self) -> None:
-        pcm = b"\x01\x02" * 1000
-        wav = pcm_to_wav(pcm)
-        assert len(wav) > len(pcm)  # WAV has header overhead
+    def test_max_positive_normalizes_near_one(self) -> None:
+        # 16-bit max positive is 32767
+        pcm_i16 = struct.pack("<1h", 32767)
+        pcm_f32 = _i16le_to_f32le(pcm_i16)
+        (sample,) = struct.unpack("<1f", pcm_f32)
+        assert sample == pytest.approx(32767 / 32768.0)
 
-    def test_empty_pcm(self) -> None:
-        wav = pcm_to_wav(b"")
-        assert wav[:4] == b"RIFF"
+    def test_negative_normalizes(self) -> None:
+        pcm_i16 = struct.pack("<1h", -16384)
+        pcm_f32 = _i16le_to_f32le(pcm_i16)
+        (sample,) = struct.unpack("<1f", pcm_f32)
+        assert sample == pytest.approx(-0.5)
 
-
-# ---------------------------------------------------------------------------
-# _rms_energy
-# ---------------------------------------------------------------------------
-
-
-class TestRmsEnergy:
-    def test_silence_is_zero(self) -> None:
-        pcm = b"\x00" * 4096
-        assert _rms_energy(pcm) == 0.0
-
-    def test_loud_signal(self) -> None:
-        # 2048 samples of constant 10000
-        pcm = struct.pack("<2048h", *([10000] * 2048))
-        assert _rms_energy(pcm) == pytest.approx(10000.0)
-
-    def test_quiet_signal(self) -> None:
-        pcm = struct.pack("<2048h", *([50] * 2048))
-        assert _rms_energy(pcm) == pytest.approx(50.0)
-
-    def test_empty_returns_zero(self) -> None:
-        assert _rms_energy(b"") == 0.0
+    def test_empty_input(self) -> None:
+        assert _i16le_to_f32le(b"") == b""
 
 
 # ---------------------------------------------------------------------------
@@ -76,7 +58,6 @@ class TestTTSClient:
     @pytest.mark.asyncio
     async def test_synthesize_returns_bytes(self) -> None:
         client = TTSClient()
-        # Mock the OpenAI client.
         mock_openai = AsyncMock()
         mock_response = MagicMock()
         mock_response.read.return_value = b"RIFF\x00\x00\x00\x00WAVEfake-audio"
@@ -104,7 +85,7 @@ class TestTTSClient:
     async def test_synthesize_handles_exception(self) -> None:
         client = TTSClient()
         mock_openai = AsyncMock()
-        mock_openai.audio.speech.create.side_effect = RuntimeError("NIM down")
+        mock_openai.audio.speech.create.side_effect = RuntimeError("TTS down")
         client._client = mock_openai
 
         result = await client.synthesize("Hello")
@@ -117,40 +98,30 @@ class TestTTSClient:
 
 
 class TestASRClient:
-    @pytest.mark.asyncio
-    async def test_transcribe_returns_text(self) -> None:
+    def test_not_available_before_start(self) -> None:
         client = ASRClient()
-        mock_openai = AsyncMock()
-        mock_response = MagicMock()
-        mock_response.text = "Hello world"
-        mock_openai.audio.transcriptions.create.return_value = mock_response
-        client._client = mock_openai
-
-        result = await client.transcribe(pcm_to_wav(b"\x00" * 4096))
-        assert result == "Hello world"
+        assert not client.available
 
     @pytest.mark.asyncio
-    async def test_transcribe_empty_wav(self) -> None:
+    async def test_send_audio_when_not_connected(self) -> None:
         client = ASRClient()
-        client._client = AsyncMock()
-        result = await client.transcribe(b"")
-        assert result == ""
+        # Should not raise.
+        await client.send_audio(b"\x00" * 4096)
 
     @pytest.mark.asyncio
-    async def test_transcribe_no_client(self) -> None:
+    async def test_send_audio_converts_and_sends(self) -> None:
         client = ASRClient()
-        result = await client.transcribe(b"some-wav-data")
-        assert result == ""
+        mock_ws = AsyncMock()
+        client._ws = mock_ws
+        client._connected = True
 
-    @pytest.mark.asyncio
-    async def test_transcribe_handles_exception(self) -> None:
-        client = ASRClient()
-        mock_openai = AsyncMock()
-        mock_openai.audio.transcriptions.create.side_effect = RuntimeError("NIM down")
-        client._client = mock_openai
+        pcm_i16 = struct.pack("<4h", 0, 16384, -16384, 32767)
+        await client.send_audio(pcm_i16)
 
-        result = await client.transcribe(pcm_to_wav(b"\x00" * 4096))
-        assert result == ""
+        mock_ws.send.assert_called_once()
+        sent_data = mock_ws.send.call_args[0][0]
+        # 4 samples * 4 bytes = 16 bytes of f32le
+        assert len(sent_data) == 16
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +134,6 @@ class TestTTSLoop:
     async def test_loop_drains_speech_and_enqueues_wav(self) -> None:
         state = PromptState()
         orch = Orchestrator(state)
-        # Enqueue a speech item.
         await orch._enqueue_speech(SpeechPriority.PLANNING, "Test message")
 
         mock_tts = AsyncMock(spec=TTSClient)
@@ -172,7 +142,6 @@ class TestTTSLoop:
         tts_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
         task = asyncio.create_task(tts_loop(orch, mock_tts, tts_queue))
-        # Wait for the TTS to process.
         await asyncio.sleep(0.05)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
@@ -185,66 +154,34 @@ class TestTTSLoop:
 
 
 # ---------------------------------------------------------------------------
-# asr_loop (VAD integration)
+# asr_loop
 # ---------------------------------------------------------------------------
 
 
 class TestASRLoop:
     @pytest.mark.asyncio
-    async def test_loop_detects_speech_and_transcribes(self) -> None:
+    async def test_loop_forwards_audio_to_client(self) -> None:
         audio_queue: asyncio.Queue[bytes] = asyncio.Queue()
-        transcripts: list[str] = []
 
-        async def on_transcript(text: str) -> None:
-            transcripts.append(text)
+        async def noop_transcript(text: str) -> None:
+            pass
 
-        mock_asr = AsyncMock(spec=ASRClient)
-        mock_response = MagicMock()
-        mock_response.text = "Take me to the subway"
-        mock_asr.transcribe.return_value = "Take me to the subway"
+        mock_asr = ASRClient()
+        mock_asr._connected = True
+        mock_asr._ws = AsyncMock()
+        mock_asr._on_transcript = noop_transcript
 
-        # Simulate speech: loud chunks followed by silence.
-        loud_chunk = struct.pack("<4096h", *([int(_ENERGY_THRESHOLD * 2)] * 4096))
-        silent_chunk = struct.pack("<4096h", *([10] * 4096))
+        pcm = struct.pack("<1024h", *([100] * 1024))
+        await audio_queue.put(pcm)
 
-        # Push enough loud chunks to exceed MIN_SPEECH_CHUNKS.
-        for _ in range(_MIN_SPEECH_CHUNKS + 1):
-            await audio_queue.put(loud_chunk)
-        # Push silence to trigger end-of-speech.
-        for _ in range(_SILENCE_CHUNKS_TO_END + 1):
-            await audio_queue.put(silent_chunk)
-
-        task = asyncio.create_task(asr_loop(audio_queue, mock_asr, on_transcript))
-        await asyncio.sleep(0.1)
+        task = asyncio.create_task(asr_loop(audio_queue, mock_asr, noop_transcript))
+        await asyncio.sleep(0.05)
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
 
-        assert mock_asr.transcribe.call_count >= 1
-        assert "Take me to the subway" in transcripts
-
-    @pytest.mark.asyncio
-    async def test_loop_ignores_pure_silence(self) -> None:
-        audio_queue: asyncio.Queue[bytes] = asyncio.Queue()
-        transcripts: list[str] = []
-
-        async def on_transcript(text: str) -> None:
-            transcripts.append(text)
-
-        mock_asr = AsyncMock(spec=ASRClient)
-
-        silent_chunk = struct.pack("<4096h", *([10] * 4096))
-        for _ in range(20):
-            await audio_queue.put(silent_chunk)
-
-        task = asyncio.create_task(asr_loop(audio_queue, mock_asr, on_transcript))
-        await asyncio.sleep(0.1)
-        task.cancel()
-        with pytest.raises(asyncio.CancelledError):
-            await task
-
-        mock_asr.transcribe.assert_not_called()
-        assert transcripts == []
+        # Audio should have been forwarded to the WebSocket.
+        mock_asr._ws.send.assert_called_once()
 
 
 # ---------------------------------------------------------------------------

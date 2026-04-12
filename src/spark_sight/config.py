@@ -40,19 +40,18 @@ class NemotronSettings:
 
 @dataclass(frozen=True, slots=True)
 class ParakeetSettings:
-    """Parakeet 1.1B RNNT — Speech-to-Text."""
+    """Parakeet-EOU-120M — Streaming Speech-to-Text via WebSocket."""
 
-    nim_url: str = field(default_factory=lambda: _env("PARAKEET_NIM_URL", "http://localhost:9000/v1"))
-    model: str = field(default_factory=lambda: _env("PARAKEET_MODEL", "parakeet-1.1b-rnnt"))
+    ws_url: str = field(default_factory=lambda: _env("PARAKEET_WS_URL", "ws://localhost:3030/asr"))
 
 
 @dataclass(frozen=True, slots=True)
-class MagpieSettings:
-    """Magpie TTS — Text-to-Speech."""
+class TTSSettings:
+    """Kokoro-82M — Text-to-Speech (OpenAI-compatible)."""
 
-    nim_url: str = field(default_factory=lambda: _env("MAGPIE_NIM_URL", "http://localhost:9001/v1"))
-    model: str = field(default_factory=lambda: _env("MAGPIE_MODEL", "magpie-tts"))
-    voice: str = field(default_factory=lambda: _env("MAGPIE_VOICE", "English-US.Female-1"))
+    base_url: str = field(default_factory=lambda: _env("TTS_BASE_URL", "http://localhost:8880/v1"))
+    model: str = field(default_factory=lambda: _env("TTS_MODEL", "kokoro"))
+    voice: str = field(default_factory=lambda: _env("TTS_VOICE", "af_bella"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -62,7 +61,7 @@ class Settings:
     cosmos: CosmosSettings = field(default_factory=CosmosSettings)
     nemotron: NemotronSettings = field(default_factory=NemotronSettings)
     parakeet: ParakeetSettings = field(default_factory=ParakeetSettings)
-    magpie: MagpieSettings = field(default_factory=MagpieSettings)
+    tts: TTSSettings = field(default_factory=TTSSettings)
 
 
 def get_settings() -> Settings:

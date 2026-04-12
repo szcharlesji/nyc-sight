@@ -1,9 +1,9 @@
-"""Magpie TTS — text-to-speech via NVIDIA NIM.
+"""Kokoro TTS — text-to-speech via OpenAI-compatible API.
 
-Uses the OpenAI-compatible ``/v1/audio/speech`` endpoint exposed by the
-Magpie TTS NIM container.  The ``tts_loop`` coroutine drains the
-Orchestrator's speech queue, synthesizes WAV audio, and pushes it to the
-server's TTS queue for delivery to the iPhone.
+Uses the ``/v1/audio/speech`` endpoint exposed by the Kokoro-82M TTS
+container.  The ``tts_loop`` coroutine drains the Orchestrator's speech
+queue, synthesizes WAV audio, and pushes it to the server's TTS queue
+for delivery to web clients (and text to iOS clients).
 """
 
 from __future__ import annotations
@@ -25,14 +25,14 @@ _settings = get_settings()
 
 
 class TTSClient:
-    """Async client for the Magpie TTS NIM endpoint.
+    """Async client for the Kokoro TTS endpoint (OpenAI-compatible).
 
     Parameters
     ----------
-    nim_base_url:
-        Base URL of the Magpie TTS NIM (e.g. ``http://host:9001/v1``).
+    base_url:
+        Base URL of the TTS API (e.g. ``http://host:8880/v1``).
     model:
-        Model identifier passed to the NIM API.
+        Model identifier passed to the API.
     voice:
         Voice identifier for speech synthesis.
     """
@@ -40,11 +40,11 @@ class TTSClient:
     def __init__(
         self,
         *,
-        nim_base_url: str = _settings.magpie.nim_url,
-        model: str = _settings.magpie.model,
-        voice: str = _settings.magpie.voice,
+        base_url: str = _settings.tts.base_url,
+        model: str = _settings.tts.model,
+        voice: str = _settings.tts.voice,
     ) -> None:
-        self._nim_base_url = nim_base_url
+        self._nim_base_url = base_url
         self._model = model
         self._voice = voice
         self._client: AsyncOpenAI | None = None
@@ -95,7 +95,7 @@ class TTSClient:
             if self._consecutive_failures >= 3:
                 self._failed = True
                 logger.error(
-                    "TTS unavailable — Magpie NIM at %s not reachable after %d failures. "
+                    "TTS unavailable — Kokoro at %s not reachable after %d failures. "
                     "TTS synthesis disabled. Speech will be text-only.",
                     self._nim_base_url, self._consecutive_failures,
                 )

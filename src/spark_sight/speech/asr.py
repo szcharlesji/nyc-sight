@@ -1,25 +1,24 @@
-"""Parakeet ASR — speech-to-text via NVIDIA NIM.
+"""Parakeet-EOU ASR — streaming speech-to-text via WebSocket.
 
-Uses the OpenAI Whisper-compatible ``/v1/audio/transcriptions`` endpoint
-exposed by the Parakeet 1.1B RNNT NIM container.
+Connects to the Parakeet-EOU-120M server over WebSocket and streams raw
+audio chunks.  The server performs end-of-utterance (EOU) detection and
+returns finalized transcripts as JSON events.
 
 The ``asr_loop`` coroutine drains the server's ``audio_queue`` (raw PCM
-chunks from the iPhone), performs simple energy-based voice activity
-detection, packages speech segments as WAV, sends them to Parakeet, and
-routes the transcript to the Orchestrator for planning.
+chunks from the web client mic), converts from i16le to f32le, and
+forwards them to Parakeet-EOU.  When an ``eou`` event arrives, the
+transcript is routed to the Orchestrator for planning.
 """
 
 from __future__ import annotations
 
 import asyncio
-import io
+import json
 import logging
-import math
 import struct
-import wave
 from typing import TYPE_CHECKING
 
-from openai import AsyncOpenAI
+import websockets
 
 from spark_sight.config import get_settings
 
@@ -31,111 +30,144 @@ logger = logging.getLogger(__name__)
 _settings = get_settings()
 
 # ---------------------------------------------------------------------------
-# Audio constants — must match the iPhone client's mic capture settings.
+# Audio constants — must match the web client's mic capture settings.
 # ---------------------------------------------------------------------------
 SAMPLE_RATE = 16_000   # 16 kHz
-SAMPLE_WIDTH = 2       # 16-bit (2 bytes per sample)
+SAMPLE_WIDTH = 2       # 16-bit (2 bytes per sample) — incoming i16le
 CHANNELS = 1           # mono
 
-# ---------------------------------------------------------------------------
-# VAD parameters (simple energy-based voice activity detection).
-# ---------------------------------------------------------------------------
-# RMS energy threshold to consider a chunk as "speech".  Tuned for
-# iPhone mic → WebSocket PCM.  Increase if you get false positives.
-_ENERGY_THRESHOLD = 300
 
-# Number of consecutive "silent" chunks before we consider speech ended.
-# Each chunk is 4096 samples @ 16kHz = 256 ms, so 6 chunks ≈ 1.5 s.
-_SILENCE_CHUNKS_TO_END = 6
+def _i16le_to_f32le(pcm_i16: bytes) -> bytes:
+    """Convert 16-bit signed PCM to 32-bit float PCM.
 
-# Minimum number of "speech" chunks required to trigger transcription.
-# Filters out short noise bursts.  3 chunks ≈ 768 ms.
-_MIN_SPEECH_CHUNKS = 3
-
-# Maximum speech duration in chunks before forced transcription.
-# 120 chunks × 256 ms = ~30 seconds.
-_MAX_SPEECH_CHUNKS = 120
-
-
-def _rms_energy(pcm: bytes) -> float:
-    """Compute RMS energy of 16-bit little-endian PCM."""
-    n_samples = len(pcm) // SAMPLE_WIDTH
-    if n_samples == 0:
-        return 0.0
-    samples = struct.unpack(f"<{n_samples}h", pcm[:n_samples * SAMPLE_WIDTH])
-    return math.sqrt(sum(s * s for s in samples) / n_samples)
-
-
-def pcm_to_wav(pcm: bytes) -> bytes:
-    """Wrap raw PCM bytes in a WAV header (16 kHz, 16-bit, mono)."""
-    buf = io.BytesIO()
-    with wave.open(buf, "wb") as wf:
-        wf.setnchannels(CHANNELS)
-        wf.setsampwidth(SAMPLE_WIDTH)
-        wf.setframerate(SAMPLE_RATE)
-        wf.writeframes(pcm)
-    return buf.getvalue()
+    Parakeet-EOU accepts binary WebSocket frames as f32le at 16 kHz mono.
+    The web client sends i16le, so we normalize to [-1.0, 1.0] range.
+    """
+    n_samples = len(pcm_i16) // SAMPLE_WIDTH
+    samples_i16 = struct.unpack(f"<{n_samples}h", pcm_i16[: n_samples * SAMPLE_WIDTH])
+    samples_f32 = [s / 32768.0 for s in samples_i16]
+    return struct.pack(f"<{n_samples}f", *samples_f32)
 
 
 class ASRClient:
-    """Async client for the Parakeet ASR NIM endpoint.
+    """Streaming ASR client for the Parakeet-EOU WebSocket endpoint.
 
-    Parameters
-    ----------
-    nim_base_url:
-        Base URL of the Parakeet NIM (e.g. ``http://host:9000/v1``).
-    model:
-        Model identifier passed to the NIM API.
+    Maintains a persistent WebSocket connection.  Audio is pushed via
+    ``send_audio()``, and finalized transcripts arrive through the
+    ``on_transcript`` callback provided at ``start()``.
     """
 
     def __init__(
         self,
         *,
-        nim_base_url: str = _settings.parakeet.nim_url,
-        model: str = _settings.parakeet.model,
+        ws_url: str = _settings.parakeet.ws_url,
     ) -> None:
-        self._nim_base_url = nim_base_url
-        self._model = model
-        self._client: AsyncOpenAI | None = None
+        self._ws_url = ws_url
+        self._ws: websockets.WebSocketClientProtocol | None = None
+        self._listener_task: asyncio.Task | None = None
+        self._on_transcript: Callable[[str], Awaitable[None]] | None = None
+        self._connected = False
 
-    async def start(self) -> None:
-        self._client = AsyncOpenAI(
-            base_url=self._nim_base_url,
-            api_key="not-needed",
-        )
-        logger.info("ASRClient started (model=%s)", self._model)
+    async def start(
+        self,
+        on_transcript: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
+        """Open the WebSocket to Parakeet-EOU and start listening for events."""
+        self._on_transcript = on_transcript
+        await self._connect()
+
+    async def _connect(self) -> None:
+        """Establish WebSocket connection with retry."""
+        try:
+            self._ws = await websockets.connect(self._ws_url)
+            self._connected = True
+            self._listener_task = asyncio.create_task(
+                self._listen(), name="asr-listener"
+            )
+            logger.info("ASRClient connected to %s", self._ws_url)
+        except Exception:
+            self._connected = False
+            logger.warning(
+                "ASRClient could not connect to %s — ASR disabled", self._ws_url
+            )
 
     async def stop(self) -> None:
-        if self._client:
-            await self._client.close()
-            self._client = None
+        """Send end-of-stream and close the WebSocket."""
+        if self._ws and self._connected:
+            try:
+                await self._ws.send(json.dumps({"type": "eos"}))
+                await self._ws.close()
+            except Exception:
+                pass
+        if self._listener_task:
+            self._listener_task.cancel()
+            try:
+                await self._listener_task
+            except asyncio.CancelledError:
+                pass
+        self._ws = None
+        self._connected = False
         logger.info("ASRClient stopped")
 
-    async def transcribe(self, wav_bytes: bytes) -> str:
-        """Transcribe WAV audio bytes into text.
+    @property
+    def available(self) -> bool:
+        return self._connected and self._ws is not None
 
-        Returns an empty string if the client is not started, the audio
-        is empty, or transcription fails.
-        """
-        if self._client is None or not wav_bytes:
-            return ""
-
+    async def send_audio(self, pcm_i16: bytes) -> None:
+        """Send a chunk of i16le PCM audio, converted to f32le for Parakeet-EOU."""
+        if not self.available:
+            return
         try:
-            audio_file = io.BytesIO(wav_bytes)
-            audio_file.name = "speech.wav"
-
-            transcript = await self._client.audio.transcriptions.create(
-                model=self._model,
-                file=audio_file,
-                language="en",
-            )
-            text = transcript.text.strip()
-            if text:
-                logger.info("ASR transcript: %s", text[:120])
-            return text
+            f32_data = _i16le_to_f32le(pcm_i16)
+            await self._ws.send(f32_data)
+        except websockets.ConnectionClosed:
+            logger.warning("ASR WebSocket closed during send, attempting reconnect")
+            self._connected = False
+            await self._reconnect()
         except Exception:
-            logger.exception("ASR transcription failed")
-            return ""
+            logger.warning("ASR send failed")
+
+    async def _reconnect(self) -> None:
+        """Attempt to reconnect after a disconnection."""
+        if self._listener_task:
+            self._listener_task.cancel()
+        await asyncio.sleep(2)
+        await self._connect()
+
+    async def _listen(self) -> None:
+        """Listen for transcript events from Parakeet-EOU."""
+        try:
+            async for message in self._ws:
+                try:
+                    event = json.loads(message)
+                except (json.JSONDecodeError, TypeError):
+                    continue
+
+                event_type = event.get("type")
+
+                if event_type == "eou":
+                    text = event.get("text", "").strip()
+                    if text and self._on_transcript:
+                        logger.info("ASR transcript (eou): %s", text[:120])
+                        await self._on_transcript(text)
+
+                elif event_type == "partial":
+                    text = event.get("text", "").strip()
+                    if text:
+                        logger.debug("ASR partial: %s", text[:80])
+
+                elif event_type == "error":
+                    logger.warning(
+                        "ASR error from server: %s", event.get("message", "unknown")
+                    )
+        except websockets.ConnectionClosed:
+            logger.warning("ASR WebSocket closed, will reconnect on next audio")
+            self._connected = False
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("ASR listener error")
+            self._connected = False
 
 
 async def asr_loop(
@@ -143,83 +175,28 @@ async def asr_loop(
     asr_client: ASRClient,
     on_transcript: Callable[[str], Awaitable[None]],
 ) -> None:
-    """Continuously buffer PCM from the audio queue, detect speech, and
-    transcribe via Parakeet.
+    """Continuously forward PCM from the audio queue to Parakeet-EOU.
 
-    Runs until cancelled.
+    Runs until cancelled.  Parakeet-EOU handles voice activity detection
+    and end-of-utterance detection internally, so this loop simply
+    converts audio format and forwards chunks.
 
     Parameters
     ----------
     audio_queue:
-        Source of raw 16-bit PCM audio chunks from the iPhone mic.
+        Source of raw 16-bit PCM audio chunks from the web client mic.
     asr_client:
-        Parakeet ASR client for transcription.
+        Streaming Parakeet-EOU ASR client.
     on_transcript:
-        Async callback invoked with each non-empty transcript string.
-        Typically ``orchestrator.handle_transcript``.
+        Passed to ``asr_client.start()`` — invoked when finalized
+        transcripts arrive.  Typically ``orchestrator.handle_transcript``.
     """
     logger.info("ASR loop started")
 
-    speech_chunks: list[bytes] = []
-    silence_count = 0
-    is_speaking = False
+    # Ensure the client has the transcript callback wired.
+    if not asr_client._on_transcript:
+        asr_client._on_transcript = on_transcript
 
     while True:
         pcm = await audio_queue.get()
-
-        energy = _rms_energy(pcm)
-
-        if energy >= _ENERGY_THRESHOLD:
-            # Speech detected.
-            if not is_speaking:
-                logger.debug("VAD: speech start (energy=%.0f)", energy)
-            is_speaking = True
-            silence_count = 0
-            speech_chunks.append(pcm)
-
-            # Force-send if we've been recording too long.
-            if len(speech_chunks) >= _MAX_SPEECH_CHUNKS:
-                logger.debug("VAD: max duration reached, forcing transcription")
-                await _flush_and_transcribe(
-                    speech_chunks, asr_client, on_transcript
-                )
-                speech_chunks = []
-                is_speaking = False
-        elif is_speaking:
-            # Silence while we were recording speech.
-            silence_count += 1
-            speech_chunks.append(pcm)  # include trailing silence for context
-
-            if silence_count >= _SILENCE_CHUNKS_TO_END:
-                logger.debug("VAD: speech end (silence=%d chunks)", silence_count)
-                await _flush_and_transcribe(
-                    speech_chunks, asr_client, on_transcript
-                )
-                speech_chunks = []
-                silence_count = 0
-                is_speaking = False
-        # else: silence and not speaking — discard.
-
-
-async def _flush_and_transcribe(
-    chunks: list[bytes],
-    asr_client: ASRClient,
-    on_transcript: Callable[[str], Awaitable[None]],
-) -> None:
-    """Package buffered PCM chunks, transcribe, and fire callback."""
-    # Filter out very short utterances (noise).
-    speech_count = sum(
-        1 for c in chunks if _rms_energy(c) >= _ENERGY_THRESHOLD
-    )
-    if speech_count < _MIN_SPEECH_CHUNKS:
-        logger.debug("VAD: too short (%d speech chunks), discarding", speech_count)
-        return
-
-    # Concatenate PCM and encode as WAV.
-    pcm = b"".join(chunks)
-    wav = pcm_to_wav(pcm)
-
-    # Transcribe.
-    text = await asr_client.transcribe(wav)
-    if text:
-        await on_transcript(text)
+        await asr_client.send_audio(pcm)

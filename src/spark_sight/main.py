@@ -1,12 +1,14 @@
 """Spark Sight — main entry point.
 
 Wires up the Orchestrator, Ambient and Planning agents, the FrameBuffer,
-TTS (Magpie), ASR (Parakeet), and the FastAPI server, then starts uvicorn.
+TTS (Kokoro), ASR (Parakeet-EOU), and the FastAPI server, then starts uvicorn.
 
 Full data flow:
-  iPhone camera  → WebSocket → FrameBuffer → AmbientAgent → Orchestrator
-  iPhone mic     → WebSocket → audio_queue → ASR loop → Orchestrator → PlanningAgent
-  Speech queue   → TTS loop  → Magpie NIM  → tts_queue → WebSocket → iPhone speaker
+  Web client mic → WebSocket → audio_queue → ASR loop → Parakeet-EOU WS → Orchestrator
+  iPhone mic     → WhisperKit STT → TRANSCRIPT → Orchestrator → PlanningAgent
+  Camera frames  → WebSocket → FrameBuffer → AmbientAgent → Orchestrator
+  Speech queue   → TTS loop  → Kokoro TTS  → tts_queue → WebSocket → web client speaker
+  Speech queue   → TTS loop  → text_response_queue → WebSocket → iOS on-device TTS
 """
 
 from __future__ import annotations
@@ -84,7 +86,7 @@ async def _lifespan(app):
     await ambient.start()
     await planning.start()
     await tts_client.start()
-    await asr_client.start()
+    await asr_client.start(on_transcript=orchestrator.handle_transcript)
 
     # Start background loops.
     bg_tasks = [
