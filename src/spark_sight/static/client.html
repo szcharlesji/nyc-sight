@@ -183,6 +183,12 @@
     background: rgba(93,202,165,0.12); color: #5DCAA5;
     border-color: rgba(93,202,165,0.3);
   }
+  .chat-msg.inspect {
+    align-self: flex-start;
+    background: rgba(133,183,235,0.12); color: #85B7EB;
+    border-left: 3px solid #85B7EB;
+    font-size: 13px;
+  }
   .chat-action-badge {
     display: inline-block; font-size: 10px; font-weight: 600;
     padding: 1px 6px; border-radius: 4px; margin-top: 4px;
@@ -269,7 +275,7 @@
   <div><span class="dbg-label">WS: </span><span id="dbg-ws" class="dbg-value">—</span></div>
   <div><span class="dbg-label">FPS out: </span><span id="dbg-fps" class="dbg-value">0</span></div>
   <div><span class="dbg-label">Frames sent: </span><span id="dbg-frames" class="dbg-value">0</span></div>
-  <div><span class="dbg-label">Audio chunks: </span><span id="dbg-audio" class="dbg-value">0</span></div>
+  <div><span class="dbg-label">GPS: </span><span id="dbg-audio" class="dbg-value">waiting</span></div>
   <div><span class="dbg-label">Messages in: </span><span id="dbg-msgs" class="dbg-value">0</span></div>
   <hr style="border-color:#333; margin:8px 0;">
   <div class="dbg-label">Recent signals:</div>
@@ -304,8 +310,8 @@
   </div>
   <div id="chat-messages"></div>
   <div id="voice-toolbar">
-    <button id="tts-toggle" class="voice-btn"><span class="dot"></span>TTS</button>
-    <button id="stt-toggle" class="voice-btn"><span class="dot"></span>STT</button>
+    <button id="tts-toggle" class="voice-btn active"><span class="dot"></span>TTS</button>
+    <button id="stt-toggle" class="voice-btn active"><span class="dot"></span>STT</button>
     <span id="voice-status" style="margin-left:auto;font-size:10px"></span>
   </div>
   <div id="chat-input-area">
@@ -321,26 +327,24 @@
 <script>
 // ── Constants ──────────────────────────────────────────
 const TARGET_FPS = 4;
-const FRAME_W = 1280;
-const FRAME_H = 720;
-const JPEG_QUALITY = 0.7;
-const MSG_FRAME  = 0x01;
-const MSG_AUDIO  = 0x02;
-const MSG_TTS    = 0x03;
-const MSG_STATUS = 0x04;
+const FRAME_W = 640;
+const FRAME_H = 480;
+const JPEG_QUALITY = 0.6;
+const MSG_FRAME      = 0x01;
+const MSG_STATUS     = 0x04;
+const MSG_TRANSCRIPT = 0x05;
+const MSG_LOCATION   = 0x06;
 const RECONNECT_DELAY = 2000;
 const MAX_DEBUG_LINES = 40;
 
 // ── State ──────────────────────────────────────────────
 let ws = null;
-let audioCtx = null;
 let mediaStream = null;
 let frameInterval = null;
-let stats = { frames: 0, audio: 0, msgsIn: 0, fpsTicks: [] };
-let ttsEnabled = false;
-let sttEnabled = false;
-let micProcessor = null;
-let micSource = null;
+let recognition = null;
+let stats = { frames: 0, msgsIn: 0, fpsTicks: [] };
+let ttsEnabled = true;
+let sttEnabled = true;
 
 // ── DOM refs ───────────────────────────────────────────
 const $mode    = document.getElementById('mode');
@@ -363,10 +367,23 @@ document.getElementById('debug-toggle').addEventListener('click', () => {
 // ── Start (requires user gesture for Safari) ───────────
 document.getElementById('start-btn').addEventListener('click', async () => {
   $overlay.classList.add('hidden');
+  // Unlock iOS speechSynthesis with a silent utterance during user gesture.
+  if (window.speechSynthesis) {
+    const unlock = new SpeechSynthesisUtterance('');
+    unlock.volume = 0;
+    speechSynthesis.speak(unlock);
+  }
   await init();
 });
 
 async function init() {
+  // navigator.mediaDevices is undefined on iOS Safari over plain HTTP.
+  if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+    $message.textContent = 'Camera/mic unavailable — please access this page over HTTPS.';
+    speakText('Camera and microphone unavailable. Please access this page over HTTPS.');
+    return;
+  }
+
   // Try rear camera first (iPhone), fall back to any camera (Mac/desktop).
   const audioConstraints = { sampleRate: 16000, channelCount: 1, echoCancellation: true, noiseSuppression: true };
   try {
@@ -382,14 +399,13 @@ async function init() {
       });
     } catch (err) {
       $message.textContent = 'Camera/mic access denied: ' + err.message;
+      speakText('Camera and microphone access denied.');
       return;
     }
   }
 
   document.getElementById('preview').srcObject = mediaStream;
   $mic.classList.remove('muted');
-
-  audioCtx = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
 
   connectWS();
 }
@@ -404,7 +420,8 @@ function connectWS() {
     $dbgWs.textContent = 'connected';
     $mode.textContent = 'patrol mode';
     startFrameCapture();
-    startMicCapture();
+    startLocationTracking();
+    if (sttEnabled) startSTT();
   };
 
   ws.onmessage = (evt) => {
@@ -416,9 +433,7 @@ function connectWS() {
     const type = data[0];
     const payload = data.slice(1);
 
-    if (type === MSG_TTS) {
-      playTTS(payload.buffer);
-    } else if (type === MSG_STATUS) {
+    if (type === MSG_STATUS) {
       try {
         const status = JSON.parse(new TextDecoder().decode(payload));
         handleStatus(status);
@@ -471,51 +486,97 @@ function stopFrameCapture() {
   if (frameInterval) { clearInterval(frameInterval); frameInterval = null; }
 }
 
-// ── Mic audio streaming ────────────────────────────────
-function startMicCapture() {
-  micSource = audioCtx.createMediaStreamSource(mediaStream);
-  micProcessor = audioCtx.createScriptProcessor(4096, 1, 1);
+// ── GPS location tracking ─────────────────────────────
+let locationWatchId = null;
 
-  micProcessor.onaudioprocess = (e) => {
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    if (!sttEnabled) return; // STT off — don't send audio
-
-    const f32 = e.inputBuffer.getChannelData(0);
-    const pcm = new Int16Array(f32.length);
-    for (let i = 0; i < f32.length; i++) {
-      const s = Math.max(-1, Math.min(1, f32[i]));
-      pcm[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
-    }
-
-    const pcmBytes = new Uint8Array(pcm.buffer);
-    const msg = new Uint8Array(1 + pcmBytes.length);
-    msg[0] = MSG_AUDIO;
-    msg.set(pcmBytes, 1);
-    ws.send(msg);
-
-    stats.audio++;
-    $dbgAu.textContent = stats.audio;
-  };
-
-  micSource.connect(micProcessor);
-  micProcessor.connect(audioCtx.destination);
+function startLocationTracking() {
+  if (!navigator.geolocation) {
+    appendDebugLog('Geolocation not supported');
+    return;
+  }
+  locationWatchId = navigator.geolocation.watchPosition(
+    (pos) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const loc = {
+        lat: pos.coords.latitude,
+        lng: pos.coords.longitude,
+        accuracy: pos.coords.accuracy,
+      };
+      const encoded = new TextEncoder().encode(JSON.stringify(loc));
+      const msg = new Uint8Array(1 + encoded.length);
+      msg[0] = MSG_LOCATION;
+      msg.set(encoded, 1);
+      ws.send(msg);
+      $dbgAu.textContent = `${loc.lat.toFixed(4)}, ${loc.lng.toFixed(4)}`;
+    },
+    (err) => {
+      appendDebugLog('GPS error: ' + err.message);
+    },
+    { enableHighAccuracy: true, maximumAge: 5000 }
+  );
 }
 
-// ── TTS playback ─────────────────────────────────────
-async function playTTS(wavBuffer) {
-  if (!ttsEnabled) return; // TTS off — skip playback
-  if (audioCtx.state === 'suspended') await audioCtx.resume();
-  try {
-    const buf = await audioCtx.decodeAudioData(wavBuffer.slice(0));
-    const src = audioCtx.createBufferSource();
-    src.buffer = buf;
-    src.connect(audioCtx.destination);
-    src.start(0);
-  } catch {
-    const blob = new Blob([wavBuffer], { type: 'audio/wav' });
-    const audio = new Audio(URL.createObjectURL(blob));
-    audio.play().catch(() => {});
+// ── Native iOS Speech Recognition (STT) ──────────────
+function startSTT() {
+  // Stop any existing recognition first (e.g. on WebSocket reconnect).
+  stopSTT();
+  const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SpeechRecognition) {
+    addChatMsg('system', 'Speech recognition not supported in this browser');
+    return;
   }
+  recognition = new SpeechRecognition();
+  recognition.continuous = true;
+  recognition.interimResults = false;
+  recognition.lang = 'en-US';
+
+  recognition.onresult = (e) => {
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      if (e.results[i].isFinal) {
+        const text = e.results[i][0].transcript.trim();
+        if (text && ws && ws.readyState === WebSocket.OPEN) {
+          const encoded = new TextEncoder().encode(text);
+          const msg = new Uint8Array(1 + encoded.length);
+          msg[0] = MSG_TRANSCRIPT;
+          msg.set(encoded, 1);
+          ws.send(msg);
+          // Chat display handled when server echoes back as TRANSCRIPT status.
+        }
+      }
+    }
+  };
+
+  recognition.onerror = (e) => {
+    if (e.error !== 'no-speech') {
+      appendDebugLog('STT error: ' + e.error);
+    }
+  };
+
+  // Auto-restart on end (iOS Safari stops after silence).
+  recognition.onend = () => {
+    if (sttEnabled) {
+      try { recognition.start(); } catch {}
+    }
+  };
+
+  recognition.start();
+}
+
+function stopSTT() {
+  if (recognition) {
+    try { recognition.stop(); } catch {}
+    recognition = null;
+  }
+}
+
+// ── Native iOS Speech Synthesis (TTS) ─────────────────
+function speakText(text) {
+  if (!ttsEnabled || !text) return;
+  if (!window.speechSynthesis) return;
+  const utt = new SpeechSynthesisUtterance(text);
+  utt.lang = 'en-US';
+  utt.rate = 1.1;
+  speechSynthesis.speak(utt);
 }
 
 // ── HUD status updates ────────────────────────────────────
@@ -585,6 +646,7 @@ function handleStatus(s) {
       if (s.message) $message.textContent = s.message;
       appendDebugLog(s.signal + (s.message ? ': ' + s.message : ''));
       // Ambient agent signals → chat as distinct ambient messages
+      // (speech is handled separately via the 'speech' event — don't speak here)
       if (s.message) {
         const emoji = SIG_EMOJI[s.signal] || '👁';
         const el = addChatMsg('ambient', `${emoji} [${s.signal}] ${s.message}`);
@@ -595,13 +657,8 @@ function handleStatus(s) {
   } else if (s.type === 'speech') {
     $message.textContent = s.text;
     appendDebugLog('TTS: ' + s.text);
-    addChatMsg('tts', '🔊 ' + s.text);
-  } else if (s.type === 'transcript') {
-    $signal.textContent = 'you said:';
-    $signal.className = '';
-    $message.textContent = s.text;
-    appendDebugLog('ASR: ' + s.text);
-    addChatMsg('asr', '🎙 ' + s.text);
+    addChatMsg('tts', s.text);
+    speakText(s.text);
   }
 }
 
@@ -703,8 +760,10 @@ async function sendChat() {
             $chatMsgs.scrollTop = $chatMsgs.scrollHeight;
           } else if (d.type === 'done') {
             // Final clean message from server-side parsing
-            agentEl.textContent = d.message || stripThink(fullText);
+            const finalMsg = d.message || stripThink(fullText);
+            agentEl.textContent = finalMsg;
             agentEl.classList.remove('streaming');
+            speakText(finalMsg);
             if (d.action && d.action !== 'answer') {
               const badge = document.createElement('div');
               badge.className = 'chat-action-badge';
@@ -723,9 +782,14 @@ async function sendChat() {
               $asPrompt.textContent = d.inspect_prompt.length > 30 ? d.inspect_prompt.slice(0, 30) + '…' : d.inspect_prompt;
             }
             $chatMsgs.scrollTop = $chatMsgs.scrollHeight;
+          } else if (d.type === 'inspect_result') {
+            addChatMsg('inspect', d.message);
+            speakText(d.message);
+            $chatMsgs.scrollTop = $chatMsgs.scrollHeight;
           } else if (d.type === 'error') {
             agentEl.textContent = '⚠ ' + d.content;
             agentEl.classList.remove('streaming');
+            speakText(d.content);
           } else if (d.type === 'debug') {
             debugEvents.push(d);
           }
@@ -733,12 +797,15 @@ async function sendChat() {
       }
     }
     if (agentEl.classList.contains('streaming')) {
-      agentEl.textContent = stripThink(fullText) || 'No response';
+      const noResp = stripThink(fullText) || 'No response';
+      agentEl.textContent = noResp;
       agentEl.classList.remove('streaming');
+      speakText(noResp);
     }
   } catch {
     agentEl.textContent = '⚠ Connection error';
     agentEl.classList.remove('streaming');
+    speakText('Connection error');
   }
 
   // Debug details panel
@@ -806,6 +873,7 @@ function updateVoiceStatus() {
 $ttsBtn.addEventListener('click', () => {
   ttsEnabled = !ttsEnabled;
   $ttsBtn.classList.toggle('active', ttsEnabled);
+  if (!ttsEnabled && window.speechSynthesis) speechSynthesis.cancel();
   updateVoiceStatus();
   addChatMsg('system', ttsEnabled ? 'TTS enabled' : 'TTS disabled');
 });
@@ -813,6 +881,11 @@ $ttsBtn.addEventListener('click', () => {
 $sttBtn.addEventListener('click', () => {
   sttEnabled = !sttEnabled;
   $sttBtn.classList.toggle('active', sttEnabled);
+  if (sttEnabled) {
+    startSTT();
+  } else {
+    stopSTT();
+  }
   updateVoiceStatus();
   addChatMsg('system', sttEnabled ? 'STT enabled — listening' : 'STT disabled');
 });

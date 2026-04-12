@@ -88,8 +88,8 @@ class Orchestrator:
         self._on_speech = on_speech
         self._on_status = on_status
 
-        # Speech queue: list of (priority, text) — drained by TTS consumer.
-        self._speech_queue: asyncio.Queue[tuple[SpeechPriority, str]] = asyncio.Queue()
+        # Latest GPS location from the iPhone (set by server app).
+        self.user_location: dict | None = None  # {lat, lng, accuracy, ts}
 
     # ------------------------------------------------------------------
     # Ambient signal dispatch
@@ -138,7 +138,7 @@ class Orchestrator:
     # Planning action dispatch
     # ------------------------------------------------------------------
 
-    async def handle_planning_response(self, response: PlanningResponse) -> None:
+    async def handle_planning_response(self, response: PlanningResponse) -> str | None:
         """Process an action produced by the Planning Agent.
 
         Routing rules:
@@ -146,6 +146,8 @@ class Orchestrator:
         - inspect → forward one-shot query to Ambient Agent.
         - answer → speak directly (no vision needed).
         - reset → clear goal, revert to patrol.
+
+        Returns the inspect result text for INSPECT actions, ``None`` otherwise.
         """
         logger.info(
             "[Planning] action=%s | msg=%s | goal=%s",
@@ -185,11 +187,19 @@ class Orchestrator:
                             await self._enqueue_speech(
                                 SpeechPriority.PLANNING, inspect_result.message
                             )
+                            return inspect_result.message
+                        else:
+                            fallback = "I couldn't get a clear reading — please try again."
+                            await self._enqueue_speech(
+                                SpeechPriority.PLANNING, fallback
+                            )
+                            return fallback
                     else:
+                        no_frame = "I can't see anything right now — no camera frame available."
                         await self._enqueue_speech(
-                            SpeechPriority.PLANNING,
-                            "I can't see anything right now — no camera frame available.",
+                            SpeechPriority.PLANNING, no_frame
                         )
+                        return no_frame
 
             case PlanningAction.ANSWER:
                 if response.message:
@@ -204,15 +214,22 @@ class Orchestrator:
                         SpeechPriority.PLANNING, response.message
                     )
 
+            case PlanningAction.FIND_RESTROOM:
+                if response.message:
+                    await self._enqueue_speech(
+                        SpeechPriority.PLANNING, response.message
+                    )
+                await self._handle_find_restroom()
+
     # ------------------------------------------------------------------
     # Transcript handling (ASR → Planning Agent)
     # ------------------------------------------------------------------
 
     async def handle_transcript(self, transcript: str) -> None:
-        """Route a voice transcript from ASR to the Planning Agent.
+        """Route a voice transcript to the Planning Agent.
 
-        This is the callback used by :func:`asr_loop` when Parakeet
-        produces a non-empty transcription.
+        Called when the client sends a transcript (from native iOS speech
+        recognition) over the WebSocket.
         """
         if not transcript.strip():
             return
@@ -277,13 +294,6 @@ class Orchestrator:
             last_ts = frame_obj.timestamp
             frame_num += 1
 
-            # Re-grab the absolute latest right before inference
-            # (a newer frame may have arrived while we were awaiting).
-            fresh = self.frame_buffer.latest()
-            if fresh is not None and fresh.timestamp > last_ts:
-                frame_obj = fresh
-                last_ts = fresh.timestamp
-
             import base64
             frame_b64 = base64.b64encode(frame_obj.jpeg).decode("ascii")
 
@@ -293,12 +303,14 @@ class Orchestrator:
                     {"frame_base64": frame_b64}
                 )
                 dt = round((_time.time() - t0) * 1000)
+                frame_age = round((_time.time() - frame_obj.timestamp) * 1000)
                 snap = self.state.get_snapshot()
                 logger.info(
-                    "[Ambient #%d] %s | %dms | mode=%s | goal=%s | msg=%s",
+                    "[Ambient #%d] %s | %dms | age=%dms | mode=%s | goal=%s | msg=%s",
                     frame_num,
                     response.signal,
                     dt,
+                    frame_age,
                     snap.mode,
                     (snap.active_goal or "-")[:40],
                     (response.message or "-")[:60],
@@ -307,33 +319,82 @@ class Orchestrator:
             except Exception:
                 logger.exception("Error in ambient loop iteration #%d", frame_num)
 
-            # Yield to the event loop.
-            await asyncio.sleep(0)
+            # Wait at least 4 seconds between frames.
+            elapsed = _time.time() - t0
+            if elapsed < 4.0:
+                await asyncio.sleep(4.0 - elapsed)
 
     # ------------------------------------------------------------------
-    # Speech queue
+    # Speech
     # ------------------------------------------------------------------
 
     async def _enqueue_speech(self, priority: SpeechPriority, text: str) -> None:
-        """Add a message to the speech output queue and notify callbacks."""
+        """Push speech text to the client via the on_speech callback.
+
+        The client handles synthesis using native iOS SpeechSynthesis.
+        """
         if not text:
             return
-        await self._speech_queue.put((priority, text))
-        logger.debug("Speech enqueued [%s]: %s", priority, text[:80])
+        logger.debug("Speech [%s]: %s", priority, text[:80])
         if self._on_speech:
             await self._on_speech(priority, text)
 
-    async def next_speech(self) -> tuple[SpeechPriority, str]:
-        """Consume the next speech item (blocks until available).
+    # ------------------------------------------------------------------
+    # NYC data lookups
+    # ------------------------------------------------------------------
 
-        In the full system this feeds into Magpie TTS.
-        WARNING-priority items should preempt any currently playing audio.
-        """
-        return await self._speech_queue.get()
+    async def _handle_find_restroom(self) -> None:
+        """Query NYC Open Data for nearby restrooms and set a navigation goal."""
+        if not self.user_location:
+            await self._enqueue_speech(
+                SpeechPriority.PLANNING,
+                "I need your location to find restrooms. Please enable location services.",
+            )
+            return
 
-    @property
-    def speech_pending(self) -> bool:
-        return not self._speech_queue.empty()
+        from spark_sight.data.restrooms import find_nearby_restrooms
+
+        lat = self.user_location["lat"]
+        lng = self.user_location["lng"]
+        restrooms = await find_nearby_restrooms(lat, lng, limit=3)
+
+        if not restrooms:
+            await self._enqueue_speech(
+                SpeechPriority.PLANNING,
+                "Sorry, I couldn't find any nearby public restrooms right now.",
+            )
+            return
+
+        nearest = restrooms[0]
+        dist = nearest["distance_ft"]
+        if dist < 528:  # < 0.1 miles
+            dist_str = f"about {dist} feet"
+        else:
+            dist_str = f"about {dist / 5280:.1f} miles"
+
+        speech = (
+            f"The nearest public restroom is {nearest['name']}, "
+            f"{dist_str} away. Hours: {nearest['hours']}."
+        )
+        if len(restrooms) > 1:
+            speech += f" There's also one at {restrooms[1]['name']}."
+
+        await self._enqueue_speech(SpeechPriority.PLANNING, speech)
+
+        # Build context for the ambient agent.
+        ctx_lines = []
+        for r in restrooms:
+            ctx_lines.append(
+                f"- {r['name']} ({r['location_type']}, {r['operator']}): "
+                f"{r['distance_ft']} ft away, hours: {r['hours']}, open: {r['open']}"
+            )
+        nyc_ctx = "Nearby public restrooms:\n" + "\n".join(ctx_lines)
+
+        self.state.set_goal(
+            f"Guide user to the nearest restroom at {nearest['name']}",
+            nyc_context=nyc_ctx,
+        )
+        logger.info("Restroom goal set: %s", nearest["name"])
 
     # ------------------------------------------------------------------
     # Internal helpers
