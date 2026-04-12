@@ -51,10 +51,11 @@ from ultralytics import YOLO
 @dataclass
 class _Config:
     # Model
-    model_path: str   = "yolo11n.engine"
-    img_size:   int   = 640
-    conf_thres: float = 0.35
-    device:     int   = 0
+    model_path:       str   = "yolo11n.engine"
+    img_size:         int   = 640
+    conf_thres:       float = 0.25   # YOLO base threshold — keep low to catch proximity objects
+    class_conf_thres: float = 0.50   # extra gate for class-based (fast_moving / aerial) detections
+    device:           int   = 0
 
     # Distance thresholds (metres)
     thresh_critical: float = 0.5   # < this  → CRITICAL (stop immediately)
@@ -243,6 +244,7 @@ async def lifespan(app: FastAPI):
     _model.predict(dummy, imgsz=cfg.img_size, conf=cfg.conf_thres,
                    device=cfg.device, verbose=False)
     print(f"[startup] model ready  "
+          f"conf={cfg.conf_thres}/class_conf={cfg.class_conf_thres}  "
           f"thresh=({cfg.thresh_critical}/{cfg.thresh_warning}/{cfg.thresh_caution})m  "
           f"cooldown={cfg.cooldown}s  "
           f"fast={sorted(cfg.fast_moving_classes)}  "
@@ -279,9 +281,10 @@ def run_detection(img: Image.Image) -> dict:
         level  = classify_level(dist)
         zone   = classify_zone(xyxy, w, h)
 
-        # Include if: (a) known obstacle class  OR
+        # Include if: (a) known obstacle class with sufficient confidence  OR
         #             (b) CENTER + CRITICAL — anything straight ahead at <thresh_critical
-        is_known            = cls_id in cfg.obstacle_classes
+        #                 (proximity rule bypasses the class filter; base conf_thres is enough)
+        is_known            = cls_id in cfg.obstacle_classes and conf >= cfg.class_conf_thres
         is_central_critical = (zone == "CENTER" and level == "CRITICAL")
         if not is_known and not is_central_critical:
             continue
@@ -445,6 +448,10 @@ async def health():
     return {
         "status": "ok",
         "model":  cfg.model_path,
+        "confidence": {
+            "base":  cfg.conf_thres,
+            "class": cfg.class_conf_thres,
+        },
         "thresholds": {
             "critical_m": cfg.thresh_critical,
             "warning_m":  cfg.thresh_warning,
@@ -472,8 +479,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--model",    default=cfg.model_path, metavar="PATH",
                    help="YOLO model file (.pt or .engine)")
     p.add_argument("--img-size", default=cfg.img_size, type=int)
-    p.add_argument("--conf",     default=cfg.conf_thres, type=float,
-                   metavar="FLOAT", help="Detection confidence threshold")
+    p.add_argument("--conf",       default=cfg.conf_thres,       type=float,
+                   metavar="FLOAT", help="YOLO base confidence threshold (applies to all detections)")
+    p.add_argument("--class-conf", default=cfg.class_conf_thres, type=float,
+                   metavar="FLOAT", help="Extra confidence gate for class-based (fast_moving/aerial) detections")
     p.add_argument("--device",   default=cfg.device, type=int,
                    metavar="INT", help="CUDA device index")
 
@@ -518,6 +527,7 @@ def _apply_args(args: argparse.Namespace) -> None:
     cfg.model_path        = args.model
     cfg.img_size          = args.img_size
     cfg.conf_thres        = args.conf
+    cfg.class_conf_thres  = args.class_conf
     cfg.device            = args.device
     cfg.thresh_critical   = args.thresh_critical
     cfg.thresh_warning    = args.thresh_warning
