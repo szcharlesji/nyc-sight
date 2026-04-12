@@ -1,0 +1,4 @@
+# Optional deps for client.py speaker playback demo.
+# Building pyaudio requires apt packages:
+#   sudo apt-get install python3.12-dev portaudio19-dev
+pyaudio>=0.2.14

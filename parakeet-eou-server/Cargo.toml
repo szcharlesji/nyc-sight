@@ -1,0 +1,27 @@
+[package]
+name = "parakeet-eou-server"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+parakeet-rs = "0.3"
+tokio = { version = "1", features = ["full"] }
+axum = { version = "0.8", features = ["ws"] }
+axum-extra = "0.10"
+tower = "0.5"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+anyhow = "1"
+base64 = "0.22"
+clap = { version = "4", features = ["derive"] }
+
+[features]
+default = []
+cuda = ["parakeet-rs/cuda"]
+
+[profile.release]
+lto = "thin"
+codegen-units = 1

@@ -49,6 +49,7 @@ class PlanningAction(StrEnum):
     REPLAN = "replan"
     FIND_RESTROOM = "find_restroom"
     FIND_CLOSURE = "find_closure"
+    SET_YOLO = "set_yolo"
 
 
 # ---------------------------------------------------------------------------
@@ -109,5 +110,7 @@ class PlanningResponse(BaseModel):
     """NYC data context to inject (only for set_goal / replan)."""
     inspect_prompt: str | None = None
     """One-shot prompt for the Ambient Agent (only for inspect)."""
+    yolo_enabled: bool | None = None
+    """Target YOLO state (only for set_yolo): True = enable, False = disable."""
     metadata: dict[str, Any] = Field(default_factory=dict)
     """Arbitrary extra data (tool call results, debug info, etc.)."""

@@ -39,7 +39,8 @@ markdown fences. Just the raw JSON.
   "message": "<text to speak to the user, or empty string>",
   "goal": "<new goal text or null>",
   "nyc_context": "<NYC data context string or null>",
-  "inspect_prompt": "<one-shot visual question or null>"
+  "inspect_prompt": "<one-shot visual question or null>",
+  "yolo_enabled": "<true | false | null>"
 }
 
 ACTION must be one of:
@@ -85,8 +86,13 @@ right now ("what do you see?", "read that sign"), use "inspect".
 "find_restroom".
 8. If the user asks about road closures, construction, blocked streets, or \
 whether a specific street is passable, use "find_closure".
-9. Messages must be concise (1-2 sentences), spoken aloud to a blind person.
-10. Output valid JSON only. No markdown, no explanation outside the JSON.
+9. If the user wants to enable or disable the YOLO obstacle detection system \
+("turn on/off obstacle warnings", "enable/disable yolo", "stop alerts", \
+"start obstacle detection"), use "set_yolo". \
+Set yolo_enabled to true to enable, false to disable. \
+All other fields are null except message (confirm to user).
+10. Messages must be concise (1-2 sentences), spoken aloud to a blind person.
+11. Output valid JSON only. No markdown, no explanation outside the JSON.
 """
 
 
@@ -248,12 +254,19 @@ class PlanningAgent(BaseAgent):
         try:
             data = json.loads(raw)
             action = PlanningAction(data.get("action", "answer"))
+            raw_yolo = data.get("yolo_enabled")
+            yolo_enabled: bool | None = None
+            if isinstance(raw_yolo, bool):
+                yolo_enabled = raw_yolo
+            elif isinstance(raw_yolo, str) and raw_yolo.lower() in ("true", "false"):
+                yolo_enabled = raw_yolo.lower() == "true"
             return PlanningResponse(
                 action=action,
                 message=data.get("message", ""),
                 goal=data.get("goal"),
                 nyc_context=data.get("nyc_context"),
                 inspect_prompt=data.get("inspect_prompt"),
+                yolo_enabled=yolo_enabled,
                 # Carry closure search params extracted by the LLM so the
                 # synthesis step can use them without re-parsing.
                 metadata={

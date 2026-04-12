@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		EF06A77C2F8BCD35002A57BC /* SparkSightApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF06A77B2F8BCD35002A57BC /* SparkSightApp.swift */; };
-		EF06A77E2F8BCD35002A57BC /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF06A77D2F8BCD35002A57BC /* ContentView.swift */; };
 		EF06A7802F8BCD36002A57BC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EF06A77F2F8BCD36002A57BC /* Assets.xcassets */; };
 		EF06A7832F8BCD36002A57BC /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EF06A7822F8BCD36002A57BC /* Preview Assets.xcassets */; };
 		EF06A78D2F8BCD36002A57BC /* SparkSightTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF06A78C2F8BCD36002A57BC /* SparkSightTests.swift */; };
@@ -36,7 +35,6 @@
 /* Begin PBXFileReference section */
 		EF06A7782F8BCD35002A57BC /* SparkSight.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SparkSight.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		EF06A77B2F8BCD35002A57BC /* SparkSightApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkSightApp.swift; sourceTree = "<group>"; };
-		EF06A77D2F8BCD35002A57BC /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		EF06A77F2F8BCD36002A57BC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		EF06A7822F8BCD36002A57BC /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
 		EF06A7882F8BCD36002A57BC /* SparkSightTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SparkSightTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -95,7 +93,6 @@
 			isa = PBXGroup;
 			children = (
 				EF06A77B2F8BCD35002A57BC /* SparkSightApp.swift */,
-				EF06A77D2F8BCD35002A57BC /* ContentView.swift */,
 				EF06A77F2F8BCD36002A57BC /* Assets.xcassets */,
 				EF06A7812F8BCD36002A57BC /* Preview Content */,
 			);
@@ -257,7 +254,6 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				EF06A77E2F8BCD35002A57BC /* ContentView.swift in Sources */,
 				EF06A77C2F8BCD35002A57BC /* SparkSightApp.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
