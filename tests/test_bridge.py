@@ -71,63 +71,70 @@ class TestPromptState:
 
 
 # ---------------------------------------------------------------------------
+# Helper: collect speech callback calls
+# ---------------------------------------------------------------------------
+
+
+def _make_speech_collector() -> tuple[AsyncMock, list[tuple[SpeechPriority, str]]]:
+    """Return an (on_speech callback, list of (priority, text) calls)."""
+    calls: list[tuple[SpeechPriority, str]] = []
+
+    async def _on_speech(priority: SpeechPriority, text: str) -> None:
+        calls.append((priority, text))
+
+    return AsyncMock(side_effect=_on_speech), calls
+
+
+# ---------------------------------------------------------------------------
 # Orchestrator — Ambient signal routing
 # ---------------------------------------------------------------------------
 
 
 class TestOrchestratorAmbient:
-    @pytest.fixture
-    def setup(self) -> tuple[PromptState, Orchestrator]:
-        state = PromptState()
-        orch = Orchestrator(state)
-        return state, orch
-
     @pytest.mark.asyncio
-    async def test_clear_produces_no_speech(
-        self, setup: tuple[PromptState, Orchestrator]
-    ) -> None:
-        _, orch = setup
+    async def test_clear_produces_no_speech(self) -> None:
+        state = PromptState()
+        on_speech, calls = _make_speech_collector()
+        orch = Orchestrator(state, on_speech=on_speech)
         resp = AmbientResponse(signal=AmbientSignal.CLEAR)
         await orch.handle_ambient_response(resp)
-        assert not orch.speech_pending
+        assert len(calls) == 0
 
     @pytest.mark.asyncio
-    async def test_warning_enqueues_speech(
-        self, setup: tuple[PromptState, Orchestrator]
-    ) -> None:
-        _, orch = setup
+    async def test_warning_enqueues_speech(self) -> None:
+        state = PromptState()
+        on_speech, calls = _make_speech_collector()
+        orch = Orchestrator(state, on_speech=on_speech)
         resp = AmbientResponse(signal=AmbientSignal.WARNING, message="Watch out!")
         await orch.handle_ambient_response(resp)
-        assert orch.speech_pending
-        priority, text = await orch.next_speech()
-        assert priority == SpeechPriority.WARNING
-        assert text == "Watch out!"
+        assert len(calls) == 1
+        assert calls[0] == (SpeechPriority.WARNING, "Watch out!")
 
     @pytest.mark.asyncio
-    async def test_goal_reached_resets_to_patrol(
-        self, setup: tuple[PromptState, Orchestrator]
-    ) -> None:
-        state, orch = setup
+    async def test_goal_reached_resets_to_patrol(self) -> None:
+        state = PromptState()
         state.set_goal("Find subway")
+        on_speech, calls = _make_speech_collector()
+        orch = Orchestrator(state, on_speech=on_speech)
         resp = AmbientResponse(
             signal=AmbientSignal.GOAL_REACHED, message="You arrived!"
         )
         await orch.handle_ambient_response(resp)
         assert state.get_mode() == AgentMode.PATROL
-        _, text = await orch.next_speech()
-        assert text == "You arrived!"
+        assert len(calls) == 1
+        assert calls[0][1] == "You arrived!"
 
     @pytest.mark.asyncio
-    async def test_failure_resets_and_logs(
-        self, setup: tuple[PromptState, Orchestrator]
-    ) -> None:
-        state, orch = setup
+    async def test_failure_resets_and_logs(self) -> None:
+        state = PromptState()
         state.set_goal("Find subway")
+        on_speech, calls = _make_speech_collector()
+        orch = Orchestrator(state, on_speech=on_speech)
         resp = AmbientResponse(signal=AmbientSignal.FAILURE, message="Path blocked")
         await orch.handle_ambient_response(resp)
         assert state.get_mode() == AgentMode.PATROL
-        _, text = await orch.next_speech()
-        assert text == "Path blocked"
+        assert len(calls) == 1
+        assert calls[0][1] == "Path blocked"
 
 
 # ---------------------------------------------------------------------------
@@ -136,17 +143,11 @@ class TestOrchestratorAmbient:
 
 
 class TestOrchestratorPlanning:
-    @pytest.fixture
-    def setup(self) -> tuple[PromptState, Orchestrator]:
-        state = PromptState()
-        orch = Orchestrator(state)
-        return state, orch
-
     @pytest.mark.asyncio
-    async def test_set_goal_updates_state(
-        self, setup: tuple[PromptState, Orchestrator]
-    ) -> None:
-        state, orch = setup
+    async def test_set_goal_updates_state(self) -> None:
+        state = PromptState()
+        on_speech, calls = _make_speech_collector()
+        orch = Orchestrator(state, on_speech=on_speech)
         resp = PlanningResponse(
             action=PlanningAction.SET_GOAL,
             message="Guiding you to 72nd St",
@@ -157,28 +158,27 @@ class TestOrchestratorPlanning:
         assert state.get_mode() == AgentMode.GOAL
         snap = state.get_snapshot()
         assert snap.active_goal == "Navigate to 72nd St subway"
-        _, text = await orch.next_speech()
-        assert "72nd" in text
+        assert len(calls) == 1
+        assert "72nd" in calls[0][1]
 
     @pytest.mark.asyncio
-    async def test_answer_speaks_without_state_change(
-        self, setup: tuple[PromptState, Orchestrator]
-    ) -> None:
-        state, orch = setup
+    async def test_answer_speaks_without_state_change(self) -> None:
+        state = PromptState()
+        on_speech, calls = _make_speech_collector()
+        orch = Orchestrator(state, on_speech=on_speech)
         resp = PlanningResponse(
             action=PlanningAction.ANSWER,
             message="Yes, there is scaffolding nearby.",
         )
         await orch.handle_planning_response(resp)
         assert state.get_mode() == AgentMode.PATROL  # unchanged
-        _, text = await orch.next_speech()
-        assert "scaffolding" in text
+        assert len(calls) == 1
+        assert "scaffolding" in calls[0][1]
 
     @pytest.mark.asyncio
-    async def test_reset_clears_goal(
-        self, setup: tuple[PromptState, Orchestrator]
-    ) -> None:
-        state, orch = setup
+    async def test_reset_clears_goal(self) -> None:
+        state = PromptState()
+        orch = Orchestrator(state)
         state.set_goal("Active goal")
         resp = PlanningResponse(
             action=PlanningAction.RESET, message="Goal cancelled."
@@ -204,24 +204,27 @@ class TestOrchestratorInspect:
             signal=AmbientSignal.CLEAR, message="The sign says Broadway"
         )
 
+        on_speech, calls = _make_speech_collector()
         orch = Orchestrator(
-            state, ambient_agent=mock_ambient, frame_buffer=buf
+            state, ambient_agent=mock_ambient, frame_buffer=buf,
+            on_speech=on_speech,
         )
         resp = PlanningResponse(
             action=PlanningAction.INSPECT,
             message="Let me look at that for you.",
             inspect_prompt="Read all visible text",
         )
-        await orch.handle_planning_response(resp)
+        result = await orch.handle_planning_response(resp)
 
         # The orchestrator calls latest_base64() which base64-encodes the raw bytes.
         expected_b64 = buf.latest_base64()
         mock_ambient.inspect.assert_called_once_with(expected_b64, "Read all visible text")
-        # Two speech items: the planning message + the inspect result.
-        _, text1 = await orch.next_speech()
-        assert "look at that" in text1
-        _, text2 = await orch.next_speech()
-        assert "Broadway" in text2
+        # Two speech calls: the planning message + the inspect result.
+        assert len(calls) == 2
+        assert "look at that" in calls[0][1]
+        assert "Broadway" in calls[1][1]
+        # Return value carries the inspect result for the chat endpoint.
+        assert result == "The sign says Broadway"
 
     @pytest.mark.asyncio
     async def test_inspect_no_frame_speaks_fallback(self) -> None:
@@ -229,18 +232,49 @@ class TestOrchestratorInspect:
         buf = FrameBuffer()  # empty
 
         mock_ambient = AsyncMock(spec=AmbientAgent)
+        on_speech, calls = _make_speech_collector()
         orch = Orchestrator(
-            state, ambient_agent=mock_ambient, frame_buffer=buf
+            state, ambient_agent=mock_ambient, frame_buffer=buf,
+            on_speech=on_speech,
         )
         resp = PlanningResponse(
             action=PlanningAction.INSPECT,
             inspect_prompt="Read all visible text",
         )
-        await orch.handle_planning_response(resp)
+        result = await orch.handle_planning_response(resp)
 
         mock_ambient.inspect.assert_not_called()
-        _, text = await orch.next_speech()
-        assert "no camera frame" in text.lower()
+        assert len(calls) == 1
+        assert "no camera frame" in calls[0][1].lower()
+        assert result is not None
+        assert "no camera frame" in result.lower()
+
+    @pytest.mark.asyncio
+    async def test_inspect_empty_message_returns_error(self) -> None:
+        state = PromptState()
+        buf = FrameBuffer()
+        buf.push(b"test_frame")
+
+        mock_ambient = AsyncMock(spec=AmbientAgent)
+        mock_ambient.inspect.return_value = AmbientResponse(
+            signal=AmbientSignal.CLEAR, message=""
+        )
+
+        on_speech, calls = _make_speech_collector()
+        orch = Orchestrator(
+            state, ambient_agent=mock_ambient, frame_buffer=buf,
+            on_speech=on_speech,
+        )
+        resp = PlanningResponse(
+            action=PlanningAction.INSPECT,
+            inspect_prompt="Read all visible text",
+        )
+        result = await orch.handle_planning_response(resp)
+
+        assert result is not None
+        assert "try again" in result.lower()
+        assert len(calls) == 1
+        assert "try again" in calls[0][1].lower()
 
 
 # ---------------------------------------------------------------------------

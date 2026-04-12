@@ -39,30 +39,11 @@ class NemotronSettings:
 
 
 @dataclass(frozen=True, slots=True)
-class ParakeetSettings:
-    """Parakeet 1.1B RNNT — Speech-to-Text."""
-
-    nim_url: str = field(default_factory=lambda: _env("PARAKEET_NIM_URL", "http://localhost:9000/v1"))
-    model: str = field(default_factory=lambda: _env("PARAKEET_MODEL", "parakeet-1.1b-rnnt"))
-
-
-@dataclass(frozen=True, slots=True)
-class MagpieSettings:
-    """Magpie TTS — Text-to-Speech."""
-
-    nim_url: str = field(default_factory=lambda: _env("MAGPIE_NIM_URL", "http://localhost:9001/v1"))
-    model: str = field(default_factory=lambda: _env("MAGPIE_MODEL", "magpie-tts"))
-    voice: str = field(default_factory=lambda: _env("MAGPIE_VOICE", "English-US.Female-1"))
-
-
-@dataclass(frozen=True, slots=True)
 class Settings:
-    """Top-level settings container for all four NIM models."""
+    """Top-level settings container for NIM models."""
 
     cosmos: CosmosSettings = field(default_factory=CosmosSettings)
     nemotron: NemotronSettings = field(default_factory=NemotronSettings)
-    parakeet: ParakeetSettings = field(default_factory=ParakeetSettings)
-    magpie: MagpieSettings = field(default_factory=MagpieSettings)
 
 
 def get_settings() -> Settings:

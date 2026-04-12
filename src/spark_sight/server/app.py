@@ -1,8 +1,11 @@
 """FastAPI application — iPhone ↔ GB10 WebSocket bridge.
 
 Serves the iPhone client HTML page and manages a single unified WebSocket
-connection that carries camera frames, mic audio, TTS audio, and status
+connection that carries camera frames, transcript text, and status/speech
 updates between the iPhone and the AI agents on the GB10.
+
+Speech is handled natively on the iPhone via iOS SpeechSynthesis / Speech
+Recognition — the server only sends text, not audio.
 """
 
 from __future__ import annotations
@@ -26,7 +29,6 @@ from spark_sight.server.frame_buffer import FrameBuffer
 from spark_sight.server.protocol import (
     MessageType,
     pack_status,
-    pack_tts,
     unpack_message,
 )
 
@@ -58,12 +60,8 @@ def create_app(
 
     app = FastAPI(title="Spark Sight", debug=debug, lifespan=lifespan)
 
-    # Queues that feed the WebSocket send loop.
-    tts_queue: asyncio.Queue[bytes] = asyncio.Queue()
+    # Queue that feeds the WebSocket send loop.
     status_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
-
-    # Mic audio arrives here; an ASR consumer (not yet wired) will drain it.
-    audio_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
     # Track connected clients (currently only one expected).
     connected_clients: set[WebSocket] = set()
@@ -73,17 +71,11 @@ def create_app(
 
     # ── Store shared objects on app.state for external access ────────
     app.state.frame_buffer = frame_buffer
-    app.state.tts_queue = tts_queue
     app.state.status_queue = status_queue
-    app.state.audio_queue = audio_queue
     app.state.connected_clients = connected_clients
     app.state.debug_log = debug_log
 
     # ── Public helpers (called by Orchestrator / agents) ─────────────
-
-    async def speak(wav_bytes: bytes) -> None:
-        """Enqueue TTS audio to be sent to the iPhone."""
-        await tts_queue.put(wav_bytes)
 
     async def push_status(
         signal: str,
@@ -104,8 +96,20 @@ def create_app(
         if debug:
             debug_log.append(payload)
 
-    app.state.speak = speak
+    async def push_speech(priority: str, text: str) -> None:
+        """Enqueue speech text to be sent to the iPhone for native TTS."""
+        payload: dict[str, Any] = {
+            "type": "speech",
+            "priority": str(priority),
+            "text": text,
+            "ts": time.time(),
+        }
+        await status_queue.put(payload)
+        if debug:
+            debug_log.append(payload)
+
     app.state.push_status = push_status
+    app.state.push_speech = push_speech
 
     # ── Routes ───────────────────────────────────────────────────────
 
@@ -139,9 +143,7 @@ def create_app(
                     "max_size": frame_buffer.max_size,
                 },
                 "queues": {
-                    "tts": tts_queue.qsize(),
                     "status": status_queue.qsize(),
-                    "audio": audio_queue.qsize(),
                 },
                 "recent_events": list(debug_log),
             }
@@ -152,9 +154,11 @@ def create_app(
         """Remove chain-of-thought reasoning blocks."""
         import re
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-        # Handle missing opening <think> tag.
+        text = re.sub(r"<thought>.*?</thought>", "", text, flags=re.DOTALL).strip()
         if "</think>" in text:
             text = text.split("</think>", 1)[1].strip()
+        if "</thought>" in text:
+            text = text.split("</thought>", 1)[1].strip()
         return text
 
     def _parse_planning_json(text: str) -> dict[str, Any]:
@@ -210,9 +214,10 @@ def create_app(
         async def event_stream():
             full_text = ""
             t_start = time.time()
+            import os
             client = AsyncOpenAI(
                 base_url=settings.nemotron.nim_url,
-                api_key="not-needed",
+                api_key=os.environ.get("GEMINI_API_KEY") or "not-needed",
             )
             # Emit debug: request info
             yield f"data: {json.dumps({'type': 'debug', 'event': 'request', 'model': settings.nemotron.model, 'endpoint': settings.nemotron.nim_url, 'system_prompt_len': len(_PLANNING_PROMPT), 'user_content': user_content})}\n\n"
@@ -264,7 +269,9 @@ def create_app(
                             nyc_context=parsed.get("nyc_context"),
                             inspect_prompt=parsed.get("inspect_prompt"),
                         )
-                        await orchestrator.handle_planning_response(resp)
+                        inspect_text = await orchestrator.handle_planning_response(resp)
+                        if inspect_text:
+                            yield f"data: {json.dumps({'type': 'inspect_result', 'message': inspect_text})}\n\n"
                     except (ValueError, Exception):
                         logger.warning("Chat action execution failed", exc_info=True)
 
@@ -280,7 +287,7 @@ def create_app(
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # ── WebSocket ────────────────────────────────────────────────────
+    # ── WebSocket ─────────────────────────────��──────────────────────
 
     @app.websocket("/ws")
     async def unified_socket(ws: WebSocket) -> None:
@@ -288,27 +295,14 @@ def create_app(
         connected_clients.add(ws)
         logger.info("Client connected (%d total)", len(connected_clients))
 
+        # Resolve the orchestrator for transcript routing.
+        orchestrator = getattr(app.state, "orchestrator", None)
+
         async def send_loop() -> None:
-            """Push TTS audio and status updates to the iPhone."""
+            """Push status and speech updates to the iPhone."""
             while True:
-                # Wait for either queue to have something.
-                tts_task = asyncio.create_task(tts_queue.get(), name="tts")
-                status_task = asyncio.create_task(status_queue.get(), name="status")
-
-                done, pending = await asyncio.wait(
-                    {tts_task, status_task},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-
-                for task in pending:
-                    task.cancel()
-
-                for task in done:
-                    result = task.result()
-                    if isinstance(result, bytes):
-                        await ws.send_bytes(pack_tts(result))
-                    elif isinstance(result, dict):
-                        await ws.send_bytes(pack_status(result))
+                payload = await status_queue.get()
+                await ws.send_bytes(pack_status(payload))
 
         sender = asyncio.create_task(send_loop())
 
@@ -332,8 +326,21 @@ def create_app(
                             }
                         )
 
-                elif msg_type == MessageType.AUDIO:
-                    await audio_queue.put(payload)
+                elif msg_type == MessageType.TRANSCRIPT:
+                    transcript = payload.decode("utf-8", errors="replace").strip()
+                    if transcript and orchestrator:
+                        asyncio.create_task(
+                            orchestrator.handle_transcript(transcript)
+                        )
+
+                elif msg_type == MessageType.LOCATION:
+                    try:
+                        loc = json.loads(payload.decode("utf-8"))
+                        loc["ts"] = time.time()
+                        if orchestrator:
+                            orchestrator.user_location = loc
+                    except (json.JSONDecodeError, UnicodeDecodeError):
+                        pass
 
         except WebSocketDisconnect:
             logger.info("Client disconnected")

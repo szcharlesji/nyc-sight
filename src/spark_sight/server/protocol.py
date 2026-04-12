@@ -5,11 +5,10 @@ type tag.  This module defines the tags and provides pack/unpack helpers.
 
 iPhone → Server:
     0x01  JPEG camera frame
-    0x02  PCM audio chunk (16 kHz, 16-bit mono)
+    0x05  UTF-8 transcript text (from native iOS speech recognition)
 
 Server → iPhone:
-    0x03  WAV TTS audio
-    0x04  JSON status update (UTF-8)
+    0x04  JSON status update (UTF-8) — includes speech text for native TTS
 """
 
 from __future__ import annotations
@@ -23,9 +22,9 @@ class MessageType(IntEnum):
     """One-byte type tags for the unified WebSocket protocol."""
 
     FRAME = 0x01
-    AUDIO = 0x02
-    TTS = 0x03
     STATUS = 0x04
+    TRANSCRIPT = 0x05
+    LOCATION = 0x06
 
 
 def pack_message(msg_type: MessageType, payload: bytes) -> bytes:
@@ -39,11 +38,6 @@ def pack_status(data: dict[str, Any]) -> bytes:
         MessageType.STATUS,
         json.dumps(data, separators=(",", ":")).encode(),
     )
-
-
-def pack_tts(wav_bytes: bytes) -> bytes:
-    """Wrap TTS WAV audio with the type prefix."""
-    return pack_message(MessageType.TTS, wav_bytes)
 
 
 def unpack_message(data: bytes) -> tuple[MessageType, bytes]:

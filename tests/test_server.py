@@ -57,11 +57,11 @@ class TestWebSocket:
         assert frame is not None
         assert frame.jpeg == jpeg
 
-    def test_connect_and_send_audio(self, client: TestClient, app) -> None:
-        pcm = b"\x00\x01" * 2048  # fake PCM chunk
-        msg = pack_message(MessageType.AUDIO, pcm)
+    def test_connect_and_send_transcript(self, client: TestClient) -> None:
+        text = "What do you see?"
+        encoded = text.encode("utf-8")
+        msg = pack_message(MessageType.TRANSCRIPT, encoded)
 
+        # Should not raise — transcript is handled gracefully even without orchestrator.
         with client.websocket_connect("/ws") as ws:
             ws.send_bytes(msg)
-
-        assert app.state.audio_queue.qsize() >= 1
