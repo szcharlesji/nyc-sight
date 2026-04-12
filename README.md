@@ -19,8 +19,14 @@ Spark Sight runs across three devices: the **DGX Spark (GB10)** hosts all AI mod
 ### 1. DGX Spark — Model Backend
 
 **a. vLLM / NIM containers**
-Configure models and API keys first:
+Configure models and API keys first, then:
 
+```bash
+cd nim-stack
+./start.sh          # launches Nemotron, Cosmos, Magpie TTS, Parakeet ASR sequentially
+./healthcheck.sh    # verify all four services are up
+```
+**Or** gemma4-26b for the demo
 ```bash
 bash scripts/gemma4_vllm_setup.sh
 ```
