@@ -58,6 +58,10 @@ its previous mode after answering.
 - answer: Answer the user directly without vision. Only message is needed.
 - reset: Clear the current goal. The Ambient Agent reverts to Patrol Mode.
 - replan: Create a new goal after a FAILURE signal. Provide goal and message.
+- find_restroom: Find the nearest public restroom using NYC Open Data and \
+the user's GPS location. The system will look up nearby operational restrooms \
+automatically. No extra fields needed — just set action to "find_restroom" \
+and optionally a message like "Let me find the nearest restroom for you."
 
 Rules:
 1. If the user wants CONTINUOUS monitoring or to be notified about something \
@@ -70,8 +74,10 @@ right now ("what do you see?", "read that sign"), use "inspect".
 4. If the user says "cancel", "stop", or "never mind", use "reset".
 5. If the input is a failure reason (from the Ambient Agent), use "replan".
 6. For general questions not requiring vision, use "answer".
-7. Messages must be concise (1-2 sentences), spoken aloud to a blind person.
-8. Output valid JSON only. No markdown, no explanation outside the JSON.
+7. If the user asks about restrooms, bathrooms, or "where can I go", use \
+"find_restroom".
+8. Messages must be concise (1-2 sentences), spoken aloud to a blind person.
+9. Output valid JSON only. No markdown, no explanation outside the JSON.
 """
 
 
@@ -109,9 +115,10 @@ class PlanningAgent(BaseAgent):
         return "PlanningAgent"
 
     async def start(self) -> None:
+        import os
         self._client = AsyncOpenAI(
             base_url=self._nim_base_url,
-            api_key="not-needed",
+            api_key=os.environ.get("GEMINI_API_KEY") or "not-needed",
         )
         logger.info("%s started (model=%s)", self.name, self._model)
 
@@ -202,9 +209,12 @@ class PlanningAgent(BaseAgent):
         import re
         # Case 1: proper <think>...</think> tags.
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
-        # Case 2: no opening tag — everything before </think> is thinking.
+        text = re.sub(r"<thought>.*?</thought>", "", text, flags=re.DOTALL).strip()
+        # Case 2: no opening tag — everything before closing tag is thinking.
         if "</think>" in text:
             text = text.split("</think>", 1)[1].strip()
+        if "</thought>" in text:
+            text = text.split("</thought>", 1)[1].strip()
         return text
 
     def _parse_response(self, response: Any) -> PlanningResponse:

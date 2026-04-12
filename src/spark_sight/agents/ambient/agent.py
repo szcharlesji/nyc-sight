@@ -33,7 +33,11 @@ _SYSTEM_PROMPT = """\
 You are the Ambient Agent for Spark Sight, an accessibility assistant for \
 visually impaired users navigating New York City. You are their eyes.
 
-You receive one camera frame (from a chest-mounted iPhone) and a goal prompt. \
+The camera is chest-mounted on the user, giving a first-person perspective \
+pointing slightly downward. Objects at the center-bottom are directly in \
+front of the user; objects at the top of the frame are farther away.
+
+You receive one camera frame and a goal prompt. \
 Evaluate the scene and respond with EXACTLY ONE JSON object.
 
 IMPORTANT: Output ONLY the JSON object. No thinking, no explanation, no \
@@ -45,10 +49,12 @@ SIGNAL must be one of:
 - CLEAR: nothing to report. message MUST be "". Use this most of the time.
 - WARNING: immediate safety hazard (cyclist, obstacle, construction). \
 message describes the danger. Always fires regardless of mode.
-- GOAL_REACHED: the ACTIVE GOAL condition is satisfied IN THIS FRAME. \
-If the goal says "notify when you see X" and you see X → GOAL_REACHED. \
-If the goal says "guide to location" and user arrived → GOAL_REACHED. \
-message confirms what was found/achieved.
+- GOAL_REACHED: the ACTIVE GOAL condition is FULLY satisfied. \
+The user is blind — they must be close enough to physically reach or \
+touch the target. Do NOT signal GOAL_REACHED just because the target \
+is visible in the distance. Use PROGRESS to guide them closer first. \
+Only use GOAL_REACHED when the target is within arm's reach or the \
+user has clearly arrived. message confirms what was found/achieved.
 - PROGRESS: meaningful step toward the goal but NOT yet achieved. \
 Use sparingly — only for significant milestones (e.g. "subway sign \
 visible 50 feet ahead").
@@ -66,12 +72,17 @@ if the goal is already satisfied.
 5. Messages must be concise (1-2 sentences), spoken aloud to a blind person. \
 Describe position and content, not colors.
 6. Output valid JSON only. No markdown, no explanation outside the JSON.
+7. DO NOT repeat instructions you already gave recently. Check the \
+RECENT HISTORY section below — if you already said something similar \
+within the last 30 seconds, emit CLEAR instead. Only speak again if \
+the situation has CHANGED or new information is available.
 """
 
 _INSPECT_SYSTEM_PROMPT = """\
-You are a visual assistant for a visually impaired user. Answer the following \
-question about the image concisely in 1-3 sentences. Describe positions and \
-content, never reference colors alone.
+You are a visual assistant for a visually impaired user. The image is from a \
+chest-mounted camera (first-person view, slightly downward angle). Answer the \
+following question concisely in 1-3 sentences. Describe positions and content, \
+never reference colors alone.
 
 Respond with EXACTLY ONE JSON object:
 {
@@ -111,16 +122,19 @@ class AmbientAgent(BaseAgent):
         self._nim_base_url = nim_base_url
         self._model = model
         self._client: AsyncOpenAI | None = None
+        # Recent non-CLEAR messages with timestamps (max 10, last 60s).
+        self._history: list[tuple[float, str, str]] = []  # (timestamp, signal, message)
 
     @property
     def name(self) -> str:
         return "AmbientAgent"
 
     async def start(self) -> None:
-        """Initialise the NIM client."""
+        """Initialise the API client."""
+        import os
         self._client = AsyncOpenAI(
             base_url=self._nim_base_url,
-            api_key="not-needed",  # local NIM doesn't require a key
+            api_key=os.environ.get("GEMINI_API_KEY") or "not-needed",
         )
         logger.info("%s started (model=%s)", self.name, self._model)
 
@@ -156,8 +170,11 @@ class AmbientAgent(BaseAgent):
             )
         else:
             compiled = self._state.get_compiled_prompt()
+            history_block = self._format_history()
             system_content = (
-                _SYSTEM_PROMPT + f"\n\n--- GOAL PROMPT ---\n{compiled}"
+                _SYSTEM_PROMPT
+                + f"\n\n--- GOAL PROMPT ---\n{compiled}"
+                + (f"\n\n--- RECENT HISTORY ---\n{history_block}" if history_block else "")
             )
 
         mode = "inspect" if prompt_override else "ambient"
@@ -180,12 +197,20 @@ class AmbientAgent(BaseAgent):
                         ],
                     },
                 ],
-                max_tokens=256,
+                max_tokens=128,
                 temperature=0.1,
             )
-            return self._parse_response(response)
+            result = self._parse_response(response)
+            if not prompt_override and result.signal != AmbientSignal.CLEAR:
+                self._record_history(result)
+            return result
         except Exception:
             logger.exception("[Cosmos] NIM inference failed")
+            if prompt_override:
+                return AmbientResponse(
+                    signal=AmbientSignal.CLEAR,
+                    message="Vision service timed out — please try again.",
+                )
             return AmbientResponse(signal=AmbientSignal.CLEAR)
 
     async def inspect(self, frame_base64: str, prompt: str) -> AmbientResponse:
@@ -204,6 +229,32 @@ class AmbientAgent(BaseAgent):
         })
 
     # ------------------------------------------------------------------
+    # History tracking
+    # ------------------------------------------------------------------
+
+    def _record_history(self, result: AmbientResponse) -> None:
+        """Record a non-CLEAR response with timestamp."""
+        import time
+        self._history.append((time.time(), str(result.signal), result.message))
+        # Keep only last 10 entries.
+        if len(self._history) > 10:
+            self._history = self._history[-10:]
+
+    def _format_history(self) -> str:
+        """Format recent history (last 60s) for inclusion in the prompt."""
+        import time
+        now = time.time()
+        # Prune entries older than 60s.
+        self._history = [(t, s, m) for t, s, m in self._history if now - t < 60]
+        if not self._history:
+            return ""
+        lines = []
+        for ts, signal, msg in self._history:
+            ago = int(now - ts)
+            lines.append(f"- {ago}s ago [{signal}]: {msg}")
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
@@ -211,8 +262,11 @@ class AmbientAgent(BaseAgent):
     def _strip_think(text: str) -> str:
         """Remove chain-of-thought ``<think>`` blocks from Cosmos output."""
         text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL).strip()
+        text = re.sub(r"<thought>.*?</thought>", "", text, flags=re.DOTALL).strip()
         if "</think>" in text:
             text = text.split("</think>", 1)[1].strip()
+        if "</thought>" in text:
+            text = text.split("</thought>", 1)[1].strip()
         return text
 
     def _parse_response(self, response: Any) -> AmbientResponse:

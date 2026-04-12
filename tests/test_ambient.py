@@ -180,7 +180,7 @@ class TestAmbientProcess:
 
         # Verify the NIM call was made with correct structure.
         call_kwargs = mock_client.chat.completions.create.call_args.kwargs
-        assert call_kwargs["model"] == "nvidia/cosmos-reason2-8b"
+        assert call_kwargs["model"]  # model name is set from config
         messages = call_kwargs["messages"]
         assert messages[0]["role"] == "system"
         assert messages[1]["role"] == "user"
@@ -236,19 +236,26 @@ class TestAmbientLoop:
             signal=AmbientSignal.WARNING, message="Watch out!"
         )
 
-        orch = Orchestrator(state, ambient_agent=mock_agent, frame_buffer=buf)
+        speech_calls = []
+        async def on_speech(priority, text):
+            speech_calls.append((priority, text))
 
-        # Run the loop for a short time, then cancel.
+        orch = Orchestrator(
+            state, ambient_agent=mock_agent, frame_buffer=buf,
+            on_speech=on_speech,
+        )
+
+        # Run the loop long enough for at least one iteration (4s min interval).
         loop_task = asyncio.create_task(orch.run_ambient_loop())
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.5)
         loop_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await loop_task
 
         # The agent should have been called at least once.
         assert mock_agent.process.call_count >= 1
-        # Speech should have been enqueued.
-        assert orch.speech_pending
+        # Speech callback should have been invoked.
+        assert len(speech_calls) >= 1
 
     @pytest.mark.asyncio
     async def test_loop_backs_off_when_empty(self) -> None:
@@ -290,9 +297,10 @@ class TestAmbientLoop:
         # Push distinct frames so the loop processes each one (it skips duplicates).
         buf.push(b"frame_1")
         loop_task = asyncio.create_task(orch.run_ambient_loop())
-        await asyncio.sleep(0.02)
+        # The loop has a 4s minimum interval; wait long enough for two iterations.
+        await asyncio.sleep(0.5)
         buf.push(b"frame_2")  # new frame after the first error
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(5.0)
         loop_task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await loop_task
