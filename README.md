@@ -48,7 +48,7 @@ python server.py
 # → listening on http://0.0.0.0:8010
 ```
 
-### 2. Orchestrator
+### 2. Orchestrator (Loacl Machine, Not the Spark)
 
 ```bash
 uv run python -m spark_sight.main --debug
