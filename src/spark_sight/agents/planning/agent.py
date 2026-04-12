@@ -327,7 +327,7 @@ class PlanningAgent(BaseAgent):
                 f"{data['count']} active closure(s) found"
                 + (f" (showing {data['shown']})" if data["shown"] < data["count"] else "")
                 + ":\n"
-                + "\n".join(f"- {l}" for l in lines)
+                + "\n".join(f"- {line}" for line in lines)
             )
 
         synthesis_system = (
