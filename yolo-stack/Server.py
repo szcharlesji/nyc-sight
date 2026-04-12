@@ -53,8 +53,8 @@ class _Config:
     # Model
     model_path:       str   = "yolo11n.engine"
     img_size:         int   = 640
-    conf_thres:       float = 0.25   # YOLO base threshold — keep low to catch proximity objects
-    class_conf_thres: float = 0.50   # extra gate for class-based (fast_moving / aerial) detections
+    conf_thres:       float = 0.50   # YOLO base threshold — keep low to catch proximity objects
+    class_conf_thres: float = 0.75   # extra gate for class-based (fast_moving / aerial) detections
     device:           int   = 0
 
     # Distance thresholds (metres)
