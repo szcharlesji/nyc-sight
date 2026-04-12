@@ -12,7 +12,7 @@ Our two-agent architecture pairs **Cosmos Reason2** as a continuous ambient visu
 
 Four NVIDIA models. All multilingual. One device. Zero compromise on privacy. Designed to run entirely on a single NVIDIA GB10 with 128GB unified memory.
 
-## Quick Start (Same Demo Env)
+## Quick Start (Same Demo Environment)
 
 Spark Sight runs across three devices: the **DGX Spark (GB10)** hosts all AI models and data services, the **laptop** runs the orchestration layer, and an **iPhone** provides the live camera feed.
 
