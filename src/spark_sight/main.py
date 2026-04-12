@@ -20,6 +20,7 @@ import uvicorn
 
 from spark_sight.agents.ambient import AmbientAgent
 from spark_sight.agents.planning import PlanningAgent
+from spark_sight.agents.warning import WarningAgent
 from spark_sight.bridge.orchestrator import Orchestrator
 from spark_sight.bridge.prompt_state import PromptState
 from spark_sight.server.app import create_app
@@ -41,6 +42,7 @@ def build_app(*, debug: bool = False):
     # Agents
     ambient = AmbientAgent(state)
     planning = PlanningAgent(state)
+    warning = WarningAgent()
 
     # Server (creates its own queues) — lifespan handles startup/shutdown.
     app = create_app(frame_buffer, debug=debug, lifespan=_lifespan)
@@ -51,6 +53,7 @@ def build_app(*, debug: bool = False):
         ambient_agent=ambient,
         planning_agent=planning,
         frame_buffer=frame_buffer,
+        warning_agent=warning,
         on_speech=app.state.push_speech,
         on_status=app.state.push_status,
     )
@@ -59,6 +62,7 @@ def build_app(*, debug: bool = False):
     app.state.orchestrator = orchestrator
     app.state.ambient_agent = ambient
     app.state.planning_agent = planning
+    app.state.warning_agent = warning
     app.state.prompt_state = state
 
     return app
@@ -69,15 +73,18 @@ async def _lifespan(app):
     """Start/stop agents and background loops."""
     ambient = app.state.ambient_agent
     planning = app.state.planning_agent
+    warning = app.state.warning_agent
     orchestrator = app.state.orchestrator
 
     # Start agents.
     await ambient.start()
     await planning.start()
+    await warning.start()
 
     # Start background loops.
     bg_tasks = [
         asyncio.create_task(orchestrator.run_ambient_loop(), name="ambient-loop"),
+        asyncio.create_task(orchestrator.run_warning_loop(), name="warning-loop"),
     ]
 
     logger.info("Spark Sight started — agents live, server ready")
@@ -91,6 +98,7 @@ async def _lifespan(app):
                 await task
             except asyncio.CancelledError:
                 pass
+        await warning.stop()
         await ambient.stop()
         await planning.stop()
         logger.info("Spark Sight shut down")
