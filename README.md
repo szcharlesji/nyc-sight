@@ -90,7 +90,7 @@ The core innovation is this separation: the Ambient Agent is fast but narrow. Th
 
 
 
-![image-20260412105444590](/Users/chengji/Developer/Spark Hack/nyc-sight/architecture.png)
+![image-20260412105444590](architecture.png)
 
 **Ambient Agent (Cosmos Reason2)** — the system's eyes. Runs a continuous frame-processing loop at ~1-2 FPS. Each frame is evaluated against a dynamic goal prompt composed of three layers: a base safety goal (always on — obstacle warnings, hazard detection), an optional active task goal (set by the Planning Agent — "guide user to subway entrance"), and NYC context (nearby scaffolding, elevator outages, accessible signals). The agent outputs structured signals: `CLEAR` (silence), `WARNING` (immediate danger), `PROGRESS` / `CORRECTION` / `GOAL_REACHED` / `FAILURE` (goal-tracking). Most frames produce silence — the agent speaks only when something is actionable.
 
