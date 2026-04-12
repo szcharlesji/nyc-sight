@@ -9,8 +9,15 @@ Zone-based interrupt policy
   PERIPHERAL (outer edges, above ground band)        : CRITICAL only
   BOTTOM     (lower 28 % of frame = ground level)   : never interrupts
 
-Throttle: at most one interrupting alert per 4 s window.
-Exception: WARNING → CRITICAL escalation always breaks through.
+Throttle: at most one interrupting alert per cooldown window.
+Exception: CENTER + CRITICAL always fires; WARNING → CRITICAL escalation breaks through.
+
+All tuneable parameters are exposed as CLI arguments (defaults = production values).
+Docker usage:
+  docker run ... yolo-server \\
+      --model yolo11n.engine \\
+      --thresh-critical 0.4 \\
+      --fast-moving-classes "0,1,2,3,5,7,36"
 
 POST /v1/chat/completions  — OpenAI VLM-style (image_url in messages)
 POST /v1/detect/raw        — multipart file upload, full JSON payload
@@ -19,6 +26,7 @@ GET  /health
 
 from __future__ import annotations
 
+import argparse
 import base64
 import io
 import re
@@ -34,78 +42,85 @@ from PIL import Image
 from pydantic import BaseModel
 from ultralytics import YOLO
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Model config
-# ─────────────────────────────────────────────────────────────────────────────
-
-MODEL_PATH = "yolo11n.engine"   # swap to "yolo11n.pt" if TRT engine not ready
-IMG_SIZE   = 640
-CONF_THRES = 0.35
-DEVICE     = 0                  # GPU 0
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Obstacle classes  (COCO IDs)
-#
-# Only two categories — things a white cane reliably MISSES:
-#   FAST_MOVING  — enter the path faster than cane feedback
-#   AERIAL       — suspended above cane reach (pole, sign, umbrella …)
+# Runtime config  (populated from CLI args in main(), defaults = production)
 # ─────────────────────────────────────────────────────────────────────────────
 
-FAST_MOVING_CLASSES: frozenset[int] = frozenset({
-    0,   # person
-    1,   # bicycle
-    2,   # car
-    3,   # motorcycle
-    5,   # bus
-    7,   # truck
-    36,  # skateboard
-})
+@dataclass
+class _Config:
+    # Model
+    model_path: str   = "yolo11n.engine"
+    img_size:   int   = 640
+    conf_thres: float = 0.35
+    device:     int   = 0
 
-AERIAL_CLASSES: frozenset[int] = frozenset({
-    9,   # traffic light  (on pole, head height)
-    11,  # stop sign      (on pole)
-    12,  # parking meter  (waist–chest height)
-    25,  # umbrella       (sidewalk café / hand-carried, face height)
-    56,  # chair          (outdoor café seating)
-    58,  # potted plant   (elevated planter, stoop display)
-})
+    # Distance thresholds (metres)
+    thresh_critical: float = 0.5   # < this  → CRITICAL (stop immediately)
+    thresh_warning:  float = 1.5   # < this  → WARNING  (slow / swerve)
+    thresh_caution:  float = 3.0   # < this  → CAUTION  (never interrupts)
+                                   # ≥ this  → CLEAR
 
-OBSTACLE_CLASSES: frozenset[int] = FAST_MOVING_CLASSES | AERIAL_CLASSES
+    # Zone geometry (normalised 0–1)
+    zone_bottom_y:     float = 0.72   # cy ≥ this  → BOTTOM zone
+    zone_center_x_min: float = 0.22   # CENTER band: [min, max]
+    zone_center_x_max: float = 0.78
+
+    # Interrupt throttle
+    cooldown: float = 4.0   # seconds between interrupting alerts
+
+    # Obstacle classes (COCO IDs)
+    # fast_moving: enter path faster than cane feedback
+    fast_moving_classes: frozenset[int] = field(
+        default_factory=lambda: frozenset({
+            0,   # person
+            1,   # bicycle
+            2,   # car
+            3,   # motorcycle
+            5,   # bus
+            7,   # truck
+            36,  # skateboard
+        })
+    )
+    # aerial: suspended above cane reach (pole / sign / umbrella …)
+    aerial_classes: frozenset[int] = field(
+        default_factory=lambda: frozenset({
+            9,   # traffic light  (on pole, head height)
+            11,  # stop sign      (on pole)
+            12,  # parking meter  (waist–chest height)
+            25,  # umbrella       (sidewalk café / hand-carried, face height)
+            56,  # chair          (outdoor café seating)
+            58,  # potted plant   (elevated planter, stoop display)
+        })
+    )
+
+    # Server
+    host: str = "0.0.0.0"
+    port: int = 8081
+
+    @property
+    def obstacle_classes(self) -> frozenset[int]:
+        return self.fast_moving_classes | self.aerial_classes
+
+
+# Module-level singleton — overwritten by main() before uvicorn starts.
+cfg = _Config()
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Distance thresholds  (metres, bbox-area heuristic until DAv2)
+# Warning message templates
 # ─────────────────────────────────────────────────────────────────────────────
 
-THRESHOLDS = {
-    "CRITICAL": 0.5,   # < 0.5 m  → stop immediately
-    "WARNING":  1.5,   # 0.5–1.5 m → slow / swerve
-    "CAUTION":  3.0,   # 1.5–3.0 m → heads up (never interrupts)
-}                      # > 3.0 m  → CLEAR
-
-WARNING_TEMPLATES = {
+_WARNING_TEMPLATES = {
     "CRITICAL": "Emergency: {obj} {dist:.1f} metres ahead",
     "WARNING":  "Warning: {obj} {dist:.1f} metres ahead",
-    "CAUTION":  "",    # CAUTION never triggers speech
+    "CAUTION":  "",   # CAUTION never triggers speech
 }
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Zone geometry  (normalised 0–1 coordinates)
-#
-#  ┌──────────────────────────────┐
-#  │  PERIPHERAL │  CENTER  │ PERIPHERAL  │  ← y < BOTTOM_Y
-#  │─────────────────────────────│
-#  │            BOTTOM           │  ← y ≥ BOTTOM_Y  (ground level)
-#  └──────────────────────────────┘
-# ─────────────────────────────────────────────────────────────────────────────
-
-ZONE_BOTTOM_Y   = 0.72          # normalised y above which = BOTTOM
-ZONE_CENTER_X   = (0.22, 0.78)  # normalised x band = CENTER
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Interrupt throttle state  (module-level singleton)
+# Interrupt throttle state
 # ─────────────────────────────────────────────────────────────────────────────
-
-INTERRUPT_COOLDOWN = 4.0   # seconds
 
 @dataclass
 class _ThrottleState:
@@ -113,6 +128,8 @@ class _ThrottleState:
     last_level: str   = field(default="CLEAR")
 
 _throttle = _ThrottleState()
+
+_LEVEL_RANK = {"CLEAR": 0, "CAUTION": 1, "WARNING": 2, "CRITICAL": 3}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -133,11 +150,11 @@ def estimate_distance_heuristic(bbox_xyxy: list[float], img_w: int, img_h: int) 
 
 
 def classify_level(dist_m: float) -> str:
-    if dist_m < THRESHOLDS["CRITICAL"]:
+    if dist_m < cfg.thresh_critical:
         return "CRITICAL"
-    if dist_m < THRESHOLDS["WARNING"]:
+    if dist_m < cfg.thresh_warning:
         return "WARNING"
-    if dist_m < THRESHOLDS["CAUTION"]:
+    if dist_m < cfg.thresh_caution:
         return "CAUTION"
     return "CLEAR"
 
@@ -147,15 +164,15 @@ def classify_zone(bbox_xyxy: list[float], img_w: int, img_h: int) -> str:
     x1, y1, x2, y2 = bbox_xyxy
     cx = (x1 + x2) / 2 / img_w
     cy = (y1 + y2) / 2 / img_h
-    if cy >= ZONE_BOTTOM_Y:
+    if cy >= cfg.zone_bottom_y:
         return "BOTTOM"
-    if ZONE_CENTER_X[0] <= cx <= ZONE_CENTER_X[1]:
+    if cfg.zone_center_x_min <= cx <= cfg.zone_center_x_max:
         return "CENTER"
     return "PERIPHERAL"
 
 
 def build_warning_text(level: str, dist_m: float, obj_name: str) -> str:
-    template = WARNING_TEMPLATES.get(level, "")
+    template = _WARNING_TEMPLATES.get(level, "")
     if not template:
         return ""
     return template.format(dist=dist_m, obj=obj_name)
@@ -165,18 +182,15 @@ def build_warning_text(level: str, dist_m: float, obj_name: str) -> str:
 # Interrupt gate  (stateful — mutates _throttle)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_LEVEL_RANK = {"CLEAR": 0, "CAUTION": 1, "WARNING": 2, "CRITICAL": 3}
-
-
 def _can_interrupt(zone: str, level: str) -> bool:
     """Return True if this detection should trigger an audible alert.
 
-    Rules:
-    • BOTTOM  → never
-    • CAUTION → never (regardless of zone)
-    • PERIPHERAL + WARNING → never
-    • Otherwise: allow only if outside the 4 s cooldown,
-      OR if the level escalated (WARNING → CRITICAL).
+    Interrupt matrix:
+      BOTTOM               → never
+      CAUTION (any zone)   → never
+      PERIPHERAL + WARNING → never
+      CENTER + CRITICAL    → always (bypasses cooldown)
+      everything else      → only outside cooldown window, or on escalation
     """
     if level in ("CLEAR", "CAUTION"):
         return False
@@ -185,23 +199,22 @@ def _can_interrupt(zone: str, level: str) -> bool:
     if zone == "PERIPHERAL" and level != "CRITICAL":
         return False
 
-    # CENTER + CRITICAL always fires — something very close straight ahead.
+    # CENTER + CRITICAL: immediate collision threat — always fire.
     if zone == "CENTER" and level == "CRITICAL":
         _throttle.last_ts    = time.time()
         _throttle.last_level = "CRITICAL"
         return True
 
-    now = time.time()
+    now     = time.time()
     elapsed = now - _throttle.last_ts
     escalating = (
         _LEVEL_RANK.get(_throttle.last_level, 0) < _LEVEL_RANK[level]
-        and elapsed < INTERRUPT_COOLDOWN
+        and elapsed < cfg.cooldown
     )
 
-    if elapsed < INTERRUPT_COOLDOWN and not escalating:
+    if elapsed < cfg.cooldown and not escalating:
         return False
 
-    # Commit — update throttle state.
     _throttle.last_ts    = now
     _throttle.last_level = level
     return True
@@ -217,11 +230,16 @@ _model: Optional[YOLO] = None
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _model
-    print(f"[startup] loading model: {MODEL_PATH}")
-    _model = YOLO(MODEL_PATH)
-    dummy = np.zeros((IMG_SIZE, IMG_SIZE, 3), dtype=np.uint8)
-    _model.predict(dummy, imgsz=IMG_SIZE, conf=CONF_THRES, device=DEVICE, verbose=False)
-    print("[startup] model ready")
+    print(f"[startup] loading model: {cfg.model_path}")
+    _model = YOLO(cfg.model_path)
+    dummy = np.zeros((cfg.img_size, cfg.img_size, 3), dtype=np.uint8)
+    _model.predict(dummy, imgsz=cfg.img_size, conf=cfg.conf_thres,
+                   device=cfg.device, verbose=False)
+    print(f"[startup] model ready  "
+          f"thresh=({cfg.thresh_critical}/{cfg.thresh_warning}/{cfg.thresh_caution})m  "
+          f"cooldown={cfg.cooldown}s  "
+          f"fast={sorted(cfg.fast_moving_classes)}  "
+          f"aerial={sorted(cfg.aerial_classes)}")
     yield
     print("[shutdown] releasing model")
     del _model
@@ -240,7 +258,8 @@ def run_detection(img: Image.Image) -> dict:
     h, w = img_np.shape[:2]
 
     results = _model.predict(
-        img_np, imgsz=IMG_SIZE, conf=CONF_THRES, device=DEVICE, verbose=False,
+        img_np, imgsz=cfg.img_size, conf=cfg.conf_thres,
+        device=cfg.device, verbose=False,
     )[0]
 
     detections: list[dict] = []
@@ -253,20 +272,20 @@ def run_detection(img: Image.Image) -> dict:
         level  = classify_level(dist)
         zone   = classify_zone(xyxy, w, h)
 
-        # Pass through if it's a known obstacle class OR if it's an immediate
-        # collision threat (anything in the direct path at CRITICAL distance).
-        is_known   = cls_id in OBSTACLE_CLASSES
+        # Include if: (a) known obstacle class  OR
+        #             (b) CENTER + CRITICAL — anything straight ahead at <thresh_critical
+        is_known            = cls_id in cfg.obstacle_classes
         is_central_critical = (zone == "CENTER" and level == "CRITICAL")
         if not is_known and not is_central_critical:
             continue
 
         cls_name = results.names[cls_id]
-        if cls_id in FAST_MOVING_CLASSES:
+        if cls_id in cfg.fast_moving_classes:
             category = "fast_moving"
-        elif cls_id in AERIAL_CLASSES:
+        elif cls_id in cfg.aerial_classes:
             category = "aerial"
         else:
-            category = "proximity"   # caught only because of CENTER+CRITICAL rule
+            category = "proximity"  # caught only by CENTER+CRITICAL proximity rule
 
         detections.append({
             "class":      cls_name,
@@ -279,7 +298,7 @@ def run_detection(img: Image.Image) -> dict:
         })
 
     # ── Pick the single most threatening interruptable detection ──────────────
-    # Priority order: level (CRITICAL > WARNING) then zone (CENTER > PERIPHERAL).
+    # Priority: level first (CRITICAL > WARNING), then zone (CENTER > PERIPHERAL).
     candidates = [
         d for d in detections
         if d["level"] not in ("CLEAR", "CAUTION")
@@ -292,23 +311,26 @@ def run_detection(img: Image.Image) -> dict:
 
     best = max(candidates, key=_threat_key) if candidates else None
 
-    # ── Interrupt decision ─────────────────────────────────────────────────────
+    # ── Interrupt decision ────────────────────────────────────────────────────
     should_interrupt = False
     warning_text = ""
     if best:
         should_interrupt = _can_interrupt(best["zone"], best["level"])
         if should_interrupt:
-            # proximity objects were detected only because they're very close
-            # straight ahead — use a generic label instead of the raw COCO class name.
-            obj_label = "obstacle directly ahead" if best["category"] == "proximity" else best["class"]
+            # "proximity" objects: skip the COCO class name, use generic phrasing.
+            obj_label = (
+                "obstacle directly ahead"
+                if best["category"] == "proximity"
+                else best["class"]
+            )
             warning_text = build_warning_text(best["level"], best["distance_m"], obj_label)
 
     latency_ms = round((time.perf_counter() - t0) * 1000, 1)
 
     return {
         "objects":          detections,
-        "warning_level":    best["level"]    if best else "CLEAR",
-        "zone":             best["zone"]     if best else "NONE",
+        "warning_level":    best["level"]      if best else "CLEAR",
+        "zone":             best["zone"]       if best else "NONE",
         "should_interrupt": should_interrupt,
         "warning_text":     warning_text,
         "closest_m":        best["distance_m"] if best else None,
@@ -335,7 +357,7 @@ class ImageURL(BaseModel):
     url: str
 
 class ContentPart(BaseModel):
-    type: str
+    type:      str
     image_url: Optional[ImageURL] = None
     text:      Optional[str]      = None
 
@@ -370,9 +392,6 @@ async def chat_completions(req: ChatRequest):
         raise HTTPException(400, "no image_url found in messages")
 
     result = run_detection(image)
-
-    # content = warning text if interrupting, "CLEAR" otherwise.
-    # WarningAgent reads this field to decide whether to fire a speech event.
     content_text = result["warning_text"] if result["should_interrupt"] else "CLEAR"
 
     return JSONResponse({
@@ -385,12 +404,12 @@ async def chat_completions(req: ChatRequest):
             "finish_reason": "stop",
         }],
         "usage":     {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        "detection": result,   # non-standard extension — full payload for debugging
+        "detection": result,
     })
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Raw detection endpoint  (debugging / direct frontend use)
+# Raw detection endpoint
 # ─────────────────────────────────────────────────────────────────────────────
 
 @app.post("/v1/detect/raw")
@@ -405,13 +424,103 @@ async def detect_raw(file: UploadFile = File(...)):
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "model": MODEL_PATH}
+    return {
+        "status": "ok",
+        "model":  cfg.model_path,
+        "thresholds": {
+            "critical_m": cfg.thresh_critical,
+            "warning_m":  cfg.thresh_warning,
+            "caution_m":  cfg.thresh_caution,
+        },
+        "cooldown_s":           cfg.cooldown,
+        "zone_bottom_y":        cfg.zone_bottom_y,
+        "zone_center_x":        [cfg.zone_center_x_min, cfg.zone_center_x_max],
+        "fast_moving_classes":  sorted(cfg.fast_moving_classes),
+        "aerial_classes":       sorted(cfg.aerial_classes),
+    }
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Entry point
+# CLI + entry point
 # ─────────────────────────────────────────────────────────────────────────────
+
+def _parse_args() -> argparse.Namespace:
+    p = argparse.ArgumentParser(
+        description="Spark Sight YOLO Warning Service",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+
+    # ── Model ──────────────────────────────────────────────────────────────
+    p.add_argument("--model",    default=cfg.model_path, metavar="PATH",
+                   help="YOLO model file (.pt or .engine)")
+    p.add_argument("--img-size", default=cfg.img_size, type=int)
+    p.add_argument("--conf",     default=cfg.conf_thres, type=float,
+                   metavar="FLOAT", help="Detection confidence threshold")
+    p.add_argument("--device",   default=cfg.device, type=int,
+                   metavar="INT", help="CUDA device index")
+
+    # ── Distance thresholds ────────────────────────────────────────────────
+    g = p.add_argument_group("distance thresholds (metres)")
+    g.add_argument("--thresh-critical", default=cfg.thresh_critical, type=float, metavar="M")
+    g.add_argument("--thresh-warning",  default=cfg.thresh_warning,  type=float, metavar="M")
+    g.add_argument("--thresh-caution",  default=cfg.thresh_caution,  type=float, metavar="M")
+
+    # ── Zone geometry ──────────────────────────────────────────────────────
+    g = p.add_argument_group("zone geometry (normalised 0–1)")
+    g.add_argument("--zone-bottom-y",     default=cfg.zone_bottom_y,     type=float,
+                   metavar="Y", help="cy ≥ this → BOTTOM zone")
+    g.add_argument("--zone-center-x-min", default=cfg.zone_center_x_min, type=float, metavar="X")
+    g.add_argument("--zone-center-x-max", default=cfg.zone_center_x_max, type=float, metavar="X")
+
+    # ── Interrupt throttle ─────────────────────────────────────────────────
+    p.add_argument("--cooldown", default=cfg.cooldown, type=float,
+                   metavar="SEC", help="Interrupt cooldown in seconds")
+
+    # ── Obstacle classes ───────────────────────────────────────────────────
+    g = p.add_argument_group("obstacle classes (comma-separated COCO IDs)")
+    g.add_argument("--fast-moving-classes",
+                   default=",".join(str(i) for i in sorted(cfg.fast_moving_classes)),
+                   metavar="IDS",
+                   help="person=0,bicycle=1,car=2,motorcycle=3,bus=5,truck=7,skateboard=36")
+    g.add_argument("--aerial-classes",
+                   default=",".join(str(i) for i in sorted(cfg.aerial_classes)),
+                   metavar="IDS",
+                   help="traffic_light=9,stop_sign=11,parking_meter=12,"
+                        "umbrella=25,chair=56,potted_plant=58")
+
+    # ── Server ─────────────────────────────────────────────────────────────
+    p.add_argument("--host", default=cfg.host)
+    p.add_argument("--port", default=cfg.port, type=int)
+
+    return p.parse_args()
+
+
+def _apply_args(args: argparse.Namespace) -> None:
+    """Overwrite the global cfg singleton with parsed CLI values."""
+    cfg.model_path        = args.model
+    cfg.img_size          = args.img_size
+    cfg.conf_thres        = args.conf
+    cfg.device            = args.device
+    cfg.thresh_critical   = args.thresh_critical
+    cfg.thresh_warning    = args.thresh_warning
+    cfg.thresh_caution    = args.thresh_caution
+    cfg.zone_bottom_y     = args.zone_bottom_y
+    cfg.zone_center_x_min = args.zone_center_x_min
+    cfg.zone_center_x_max = args.zone_center_x_max
+    cfg.cooldown          = args.cooldown
+    cfg.fast_moving_classes = frozenset(
+        int(x.strip()) for x in args.fast_moving_classes.split(",") if x.strip()
+    )
+    cfg.aerial_classes = frozenset(
+        int(x.strip()) for x in args.aerial_classes.split(",") if x.strip()
+    )
+    cfg.host = args.host
+    cfg.port = args.port
+
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("Server:app", host="0.0.0.0", port=8081, workers=1)
+
+    args = _parse_args()
+    _apply_args(args)
+    uvicorn.run("Server:app", host=cfg.host, port=cfg.port, workers=1)
