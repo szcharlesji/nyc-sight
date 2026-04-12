@@ -90,7 +90,14 @@ async def _lifespan(app):
     bg_tasks = [
         asyncio.create_task(orchestrator.run_ambient_loop(), name="ambient-loop"),
         asyncio.create_task(
-            tts_loop(orchestrator, tts_client, app.state.tts_queue), name="tts-loop",
+            tts_loop(
+                orchestrator,
+                tts_client,
+                app.state.tts_queue,
+                send_text_response=app.state.send_text_response,
+                send_warning_text=app.state.send_warning_text,
+            ),
+            name="tts-loop",
         ),
         asyncio.create_task(
             asr_loop(app.state.audio_queue, asr_client, orchestrator.handle_transcript),

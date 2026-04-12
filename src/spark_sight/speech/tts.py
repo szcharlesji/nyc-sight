@@ -108,9 +108,12 @@ async def tts_loop(
     orchestrator: Orchestrator,
     tts_client: TTSClient,
     tts_queue: asyncio.Queue[bytes],
+    *,
+    send_text_response=None,
+    send_warning_text=None,
 ) -> None:
     """Continuously drain the speech queue, synthesize audio, and push to the
-    server's TTS output queue.
+    server's TTS output queue.  Also sends text responses to iOS clients.
 
     Runs until cancelled.
 
@@ -121,14 +124,27 @@ async def tts_loop(
     tts_client:
         Magpie TTS client for synthesis.
     tts_queue:
-        Server-side queue that feeds the WebSocket send loop.
+        Server-side queue that feeds the WebSocket send loop (WAV for web).
+    send_text_response:
+        Async callable to send text to iOS clients for on-device TTS.
+    send_warning_text:
+        Async callable to send urgent warnings to iOS clients.
     """
     logger.info("TTS loop started")
     while True:
         priority, text = await orchestrator.next_speech()
 
+        # ── iOS text path: always send text to native clients ──
+        if send_text_response or send_warning_text:
+            from spark_sight.bridge.orchestrator import SpeechPriority
+
+            if priority == SpeechPriority.WARNING and send_warning_text:
+                await send_warning_text(text, "critical")
+            elif send_text_response:
+                await send_text_response(text)
+
+        # ── Web client WAV path: synthesize via Magpie ──
         if not tts_client.available:
-            # Magpie not running — just drain the queue silently.
             logger.debug("TTS [%s] (skip, unavailable): %s", priority, text[:60])
             continue
 
