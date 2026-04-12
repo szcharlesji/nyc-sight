@@ -69,8 +69,7 @@ class _Config:
     zone_center_x_max: float = 0.78
 
     # Interrupt throttle
-    cooldown:                float = 4.0   # seconds between interrupting alerts (general)
-    cooldown_center_critical: float = 1.0  # shorter cooldown for CENTER + CRITICAL
+    cooldown: float = 4.0   # at most one alert per this many seconds
 
     # Obstacle classes (COCO IDs)
     # fast_moving: enter path faster than cane feedback
@@ -194,12 +193,12 @@ def build_warning_text(level: str, dist_m: float, obj_name: str) -> str:
 def _can_interrupt(zone: str, level: str) -> bool:
     """Return True if this detection should trigger an audible alert.
 
-    Interrupt matrix:
+    Zone/level eligibility:
       BOTTOM               → never
       CAUTION (any zone)   → never
       PERIPHERAL + WARNING → never
-      CENTER + CRITICAL    → always (bypasses cooldown)
-      everything else      → only outside cooldown window, or on escalation
+
+    Throttle: at most one alert per cfg.cooldown seconds, no exceptions.
     """
     if level in ("CLEAR", "CAUTION"):
         return False
@@ -208,23 +207,8 @@ def _can_interrupt(zone: str, level: str) -> bool:
     if zone == "PERIPHERAL" and level != "CRITICAL":
         return False
 
-    # CENTER + CRITICAL: immediate collision threat — use a shorter cooldown.
-    if zone == "CENTER" and level == "CRITICAL":
-        now = time.time()
-        if now - _throttle.last_ts < cfg.cooldown_center_critical:
-            return False
-        _throttle.last_ts    = now
-        _throttle.last_level = "CRITICAL"
-        return True
-
-    now     = time.time()
-    elapsed = now - _throttle.last_ts
-    escalating = (
-        _LEVEL_RANK.get(_throttle.last_level, 0) < _LEVEL_RANK[level]
-        and elapsed < cfg.cooldown
-    )
-
-    if elapsed < cfg.cooldown and not escalating:
+    now = time.time()
+    if now - _throttle.last_ts < cfg.cooldown:
         return False
 
     _throttle.last_ts    = now
@@ -461,8 +445,7 @@ async def health():
             "warning_m":  cfg.thresh_warning,
             "caution_m":  cfg.thresh_caution,
         },
-        "cooldown_s":                    cfg.cooldown,
-        "cooldown_center_critical_s":    cfg.cooldown_center_critical,
+        "cooldown_s": cfg.cooldown,
         "zone_bottom_y":        cfg.zone_bottom_y,
         "zone_center_x":        [cfg.zone_center_x_min, cfg.zone_center_x_max],
         "fast_moving_classes":  sorted(cfg.fast_moving_classes),
@@ -506,9 +489,7 @@ def _parse_args() -> argparse.Namespace:
 
     # ── Interrupt throttle ─────────────────────────────────────────────────
     p.add_argument("--cooldown", default=cfg.cooldown, type=float,
-                   metavar="SEC", help="Interrupt cooldown in seconds (general)")
-    p.add_argument("--cooldown-center-critical", default=cfg.cooldown_center_critical, type=float,
-                   metavar="SEC", help="Cooldown for CENTER + CRITICAL alerts (default shorter)")
+                   metavar="SEC", help="Max one alert per this many seconds")
 
     # ── Obstacle classes ───────────────────────────────────────────────────
     g = p.add_argument_group("obstacle classes (comma-separated COCO IDs)")
@@ -542,8 +523,7 @@ def _apply_args(args: argparse.Namespace) -> None:
     cfg.zone_bottom_y     = args.zone_bottom_y
     cfg.zone_center_x_min = args.zone_center_x_min
     cfg.zone_center_x_max = args.zone_center_x_max
-    cfg.cooldown                  = args.cooldown
-    cfg.cooldown_center_critical  = args.cooldown_center_critical
+    cfg.cooldown = args.cooldown
     cfg.fast_moving_classes = frozenset(
         int(x.strip()) for x in args.fast_moving_classes.split(",") if x.strip()
     )
