@@ -247,16 +247,26 @@ def run_detection(img: Image.Image) -> dict:
 
     for box in results.boxes:
         cls_id = int(box.cls[0])
-        if cls_id not in OBSTACLE_CLASSES:
+        conf   = float(box.conf[0])
+        xyxy   = box.xyxy[0].tolist()
+        dist   = estimate_distance_heuristic(xyxy, w, h)
+        level  = classify_level(dist)
+        zone   = classify_zone(xyxy, w, h)
+
+        # Pass through if it's a known obstacle class OR if it's an immediate
+        # collision threat (anything in the direct path at CRITICAL distance).
+        is_known   = cls_id in OBSTACLE_CLASSES
+        is_central_critical = (zone == "CENTER" and level == "CRITICAL")
+        if not is_known and not is_central_critical:
             continue
 
         cls_name = results.names[cls_id]
-        conf     = float(box.conf[0])
-        xyxy     = box.xyxy[0].tolist()
-        dist     = estimate_distance_heuristic(xyxy, w, h)
-        level    = classify_level(dist)
-        zone     = classify_zone(xyxy, w, h)
-        category = "fast_moving" if cls_id in FAST_MOVING_CLASSES else "aerial"
+        if cls_id in FAST_MOVING_CLASSES:
+            category = "fast_moving"
+        elif cls_id in AERIAL_CLASSES:
+            category = "aerial"
+        else:
+            category = "proximity"   # caught only because of CENTER+CRITICAL rule
 
         detections.append({
             "class":      cls_name,
