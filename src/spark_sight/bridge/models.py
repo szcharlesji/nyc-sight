@@ -48,6 +48,7 @@ class PlanningAction(StrEnum):
     RESET = "reset"
     REPLAN = "replan"
     FIND_RESTROOM = "find_restroom"
+    FIND_CLOSURE = "find_closure"
 
 
 # ---------------------------------------------------------------------------

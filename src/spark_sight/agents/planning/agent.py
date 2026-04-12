@@ -62,6 +62,13 @@ its previous mode after answering.
 the user's GPS location. The system will look up nearby operational restrooms \
 automatically. No extra fields needed — just set action to "find_restroom" \
 and optionally a message like "Let me find the nearest restroom for you."
+- find_closure: Search for active NYC street construction closures. Add \
+"closure_street" (street name in ALL CAPS, e.g. "BROADWAY") and optionally \
+"closure_borough" (single letter: M=Manhattan, X=Bronx, B=Brooklyn, \
+Q=Queens, S=Staten Island) to your JSON output. Use when the user asks \
+about blocked roads, construction activity, or whether a street is passable. \
+Set message to a short spoken confirmation like \
+"Let me check for closures on Broadway."
 
 Rules:
 1. If the user wants CONTINUOUS monitoring or to be notified about something \
@@ -76,8 +83,10 @@ right now ("what do you see?", "read that sign"), use "inspect".
 6. For general questions not requiring vision, use "answer".
 7. If the user asks about restrooms, bathrooms, or "where can I go", use \
 "find_restroom".
-8. Messages must be concise (1-2 sentences), spoken aloud to a blind person.
-9. Output valid JSON only. No markdown, no explanation outside the JSON.
+8. If the user asks about road closures, construction, blocked streets, or \
+whether a specific street is passable, use "find_closure".
+9. Messages must be concise (1-2 sentences), spoken aloud to a blind person.
+10. Output valid JSON only. No markdown, no explanation outside the JSON.
 """
 
 
@@ -185,13 +194,23 @@ class PlanningAgent(BaseAgent):
                 max_tokens=512,
                 temperature=0.2,
             )
-            return self._parse_response(response)
+            planning_response = self._parse_response(response)
         except Exception:
             logger.exception("NIM inference failed for PlanningAgent")
             return PlanningResponse(
                 action=PlanningAction.ANSWER,
                 message="Sorry, I'm having trouble processing that right now.",
             )
+
+        # If Call 1 produced find_closure, intercept and run the two-step
+        # data fetch + synthesis before returning to the orchestrator.
+        # All other actions pass through immediately — no second LLM call.
+        if planning_response.action == PlanningAction.FIND_CLOSURE:
+            return await self._fetch_and_synthesize_closure(
+                planning_response, trigger
+            )
+
+        return planning_response
 
     # ------------------------------------------------------------------
     # Internal helpers
@@ -235,6 +254,12 @@ class PlanningAgent(BaseAgent):
                 goal=data.get("goal"),
                 nyc_context=data.get("nyc_context"),
                 inspect_prompt=data.get("inspect_prompt"),
+                # Carry closure search params extracted by the LLM so the
+                # synthesis step can use them without re-parsing.
+                metadata={
+                    "closure_street": data.get("closure_street"),
+                    "closure_borough": data.get("closure_borough"),
+                },
             )
         except (json.JSONDecodeError, ValueError, KeyError):
             logger.warning("Failed to parse Planning response: %s", raw[:200])
@@ -243,3 +268,97 @@ class PlanningAgent(BaseAgent):
                 action=PlanningAction.ANSWER,
                 message=raw[:200] if raw else "I couldn't understand that.",
             )
+
+    async def _fetch_and_synthesize_closure(
+        self,
+        call1_response: PlanningResponse,
+        original_query: str,
+    ) -> PlanningResponse:
+        """Two-step closure lookup: fetch data then synthesize a spoken reply.
+
+        Called only when Call 1 returned ``find_closure``.  All other actions
+        bypass this method entirely and go straight to the orchestrator.
+
+        Step A — query the local closure data server.
+        Step B — [Call 2] ask the LLM to convert the raw data into a natural
+                 spoken sentence for the user.
+        """
+        from spark_sight.config import get_settings
+        from spark_sight.data.closures import search_closures
+
+        street: str = call1_response.metadata.get("closure_street") or ""
+        borough: str | None = call1_response.metadata.get("closure_borough")
+
+        if not street:
+            return PlanningResponse(
+                action=PlanningAction.ANSWER,
+                message="I need a street name to check for closures. Which street?",
+            )
+
+        # --- Step A: query data server ---
+        settings = get_settings()
+        data = await search_closures(
+            street=street,
+            borough=borough,
+            base_url=settings.closure.server_url,
+        )
+        logger.info(
+            "[Closure] street=%r borough=%r → %d results (error=%s)",
+            street, borough, data.get("count", 0), data.get("error"),
+        )
+
+        if data.get("error") == "server_unreachable":
+            return PlanningResponse(
+                action=PlanningAction.ANSWER,
+                message="I can't reach the closure data right now. Please try again in a moment.",
+            )
+
+        # --- Step B: [Call 2] synthesize spoken response ---
+        if data["count"] == 0:
+            data_summary = f"No active construction closures found for {street}."
+        else:
+            rows = data["results"]
+            lines = [
+                f"{r['street']} from {r['from_street']} to {r['to_street']} "
+                f"({r['borough_name']}), {r['purpose']}, until {r['end_date']}"
+                for r in rows
+            ]
+            data_summary = (
+                f"{data['count']} active closure(s) found"
+                + (f" (showing {data['shown']})" if data["shown"] < data["count"] else "")
+                + ":\n"
+                + "\n".join(f"- {l}" for l in lines)
+            )
+
+        synthesis_system = (
+            "You are a concise voice assistant for a blind user walking in NYC. "
+            "Convert the street closure data below into 1-3 natural spoken sentences. "
+            "Mention the street, cross streets, work type, and end date. "
+            "If there are more results than shown, say so briefly. "
+            "Output ONLY the spoken text — no JSON, no markdown, no preamble."
+        )
+        synthesis_user = (
+            f'User asked: "{original_query}"\n\n'
+            f"Data:\n{data_summary}"
+        )
+
+        try:
+            synthesis_resp = await self._client.chat.completions.create(
+                model=self._model,
+                messages=[
+                    {"role": "system", "content": synthesis_system},
+                    {"role": "user",   "content": synthesis_user},
+                ],
+                max_tokens=160,
+                temperature=0.3,
+            )
+            speech = self._strip_think(
+                synthesis_resp.choices[0].message.content or ""
+            ).strip()
+            if not speech:
+                speech = data_summary  # last-resort fallback
+        except Exception:
+            logger.exception("Call 2 synthesis failed — using raw data summary")
+            speech = data_summary
+
+        return PlanningResponse(action=PlanningAction.ANSWER, message=speech)
