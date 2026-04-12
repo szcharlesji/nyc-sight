@@ -89,7 +89,8 @@ class Orchestrator:
         self._on_status = on_status
 
         # Latest GPS location from the iPhone (set by server app).
-        self.user_location: dict | None = None  # {lat, lng, accuracy, ts}
+        # Default to Hudson Yards area; updated by client GPS.
+        self.user_location: dict | None = {"lat": 40.7503, "lng": -74.0014, "accuracy": 0}
 
     # ------------------------------------------------------------------
     # Ambient signal dispatch
