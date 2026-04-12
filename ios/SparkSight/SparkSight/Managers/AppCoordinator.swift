@@ -29,11 +29,13 @@ final class AppCoordinator: ObservableObject {
     @Published var currentTranscript = ""
     @Published var currentAddress = "Locating..."
     @Published var framesDelivered = 0
+    @Published var showSettings = false
 
     // MARK: - Settings (persisted in UserDefaults)
 
     @AppStorage("sparkHost") var serverHost = "192.168.1.100"
     @AppStorage("sparkPort") var serverPort = 3000
+    @AppStorage("hasConfigured") private var hasConfigured = false
 
     // MARK: - Managers
 
@@ -54,6 +56,12 @@ final class AppCoordinator: ObservableObject {
 
     /// Initialize all subsystems and connect to the DGX Spark.
     func start() async {
+        // On first launch, show settings so the user can enter their server IP.
+        if !hasConfigured {
+            showSettings = true
+            return
+        }
+
         // Enable battery monitoring for on-device battery queries.
         UIDevice.current.isBatteryMonitoringEnabled = true
 
@@ -78,6 +86,14 @@ final class AppCoordinator: ObservableObject {
         sparkClient.connect(host: serverHost, port: serverPort)
 
         tts.speak("Ready. Tap anywhere to speak.", priority: .normal)
+    }
+
+    /// Disconnect, persist settings, and restart the full connection flow.
+    func reconnect() {
+        hasConfigured = true
+        showSettings = false
+        sparkClient.disconnect()
+        Task { await start() }
     }
 
     // MARK: - User Actions (triggered by MainView gestures)

@@ -23,6 +23,17 @@ struct SparkSightApp: App {
                 .onAppear {
                     Task { await coordinator.start() }
                 }
+                .sheet(isPresented: $coordinator.showSettings) {
+                    SettingsView(
+                        serverHost: $coordinator.serverHost,
+                        serverPort: Binding(
+                            get: { String(coordinator.serverPort) },
+                            set: { coordinator.serverPort = Int($0) ?? 3000 }
+                        ),
+                        onConnect: { coordinator.reconnect() }
+                    )
+                    .interactiveDismissDisabled()
+                }
         }
     }
 

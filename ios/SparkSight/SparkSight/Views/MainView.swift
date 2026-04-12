@@ -49,9 +49,12 @@ struct MainView: View {
         // Accessibility: the entire view is one large interactive region.
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilityDescription)
-        .accessibilityHint("Tap to start or stop listening. Double tap to repeat last response. Long press to hear your location.")
+        .accessibilityHint("Tap to start or stop listening. Double tap to repeat last response. Triple tap to open settings. Long press to hear your location.")
         .accessibilityAddTraits(.allowsDirectInteraction)
-        // Gesture handlers.
+        // Gesture handlers (highest count first for correct SwiftUI priority).
+        .onTapGesture(count: 3) {
+            coordinator.showSettings = true
+        }
         .onTapGesture(count: 2) {
             coordinator.repeatLastResponse()
         }
