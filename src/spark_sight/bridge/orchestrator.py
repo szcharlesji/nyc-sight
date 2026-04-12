@@ -86,6 +86,7 @@ class Orchestrator:
         self.planning_agent = planning_agent
         self.frame_buffer = frame_buffer
         self.warning_agent = warning_agent
+        self.yolo_enabled: bool = True
 
         # External callbacks (registered by the server layer).
         self._on_speech = on_speech
@@ -216,6 +217,14 @@ class Orchestrator:
                     await self._enqueue_speech(
                         SpeechPriority.PLANNING, response.message
                     )
+
+            case PlanningAction.SET_YOLO:
+                if response.yolo_enabled is not None:
+                    self.yolo_enabled = response.yolo_enabled
+                    logger.info("YOLO warning %s by Planning Agent",
+                                "enabled" if self.yolo_enabled else "disabled")
+                if response.message:
+                    await self._enqueue_speech(SpeechPriority.PLANNING, response.message)
 
             case PlanningAction.FIND_RESTROOM:
                 if response.message:
@@ -350,6 +359,10 @@ class Orchestrator:
         last_ts = 0.0
 
         while True:
+            if not self.yolo_enabled:
+                await asyncio.sleep(1.0)
+                continue
+
             frame_obj = self.frame_buffer.latest()
             if frame_obj is None:
                 await asyncio.sleep(0.1)
