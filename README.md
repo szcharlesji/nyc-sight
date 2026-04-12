@@ -25,15 +25,6 @@ Configure models and API keys first:
 bash scripts/gemma4_vllm_setup.sh
 ```
 
-Configure models and API keys first — see [How to reproduce the demo](#how-to-reproduce-the-demo-env-vars-api-keys-sample-env) for required env vars. Then:
-
-```bash
-uv sync
-cd nim-stack
-./start.sh          # launches Nemotron, Cosmos, Magpie TTS, Parakeet ASR sequentially
-./healthcheck.sh    # verify all four services are up
-```
-
 **b. YOLO detection service**
 
 Go to the `yolo-stack`
