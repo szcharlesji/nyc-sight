@@ -27,6 +27,8 @@ from spark_sight.server.protocol import (
     MessageType,
     pack_status,
     pack_tts,
+    pack_text_response,
+    pack_warning_text,
     unpack_message,
 )
 
@@ -65,8 +67,15 @@ def create_app(
     # Mic audio arrives here; an ASR consumer (not yet wired) will drain it.
     audio_queue: asyncio.Queue[bytes] = asyncio.Queue()
 
+    # Text response queue for iOS clients (on-device TTS).
+    text_response_queue: asyncio.Queue[tuple[str, bool]] = asyncio.Queue()
+
     # Track connected clients (currently only one expected).
     connected_clients: set[WebSocket] = set()
+
+    # Track which clients use on-device STT/TTS (iOS native).
+    # When a client sends TRANSCRIPT (0x05), it's flagged as native iOS.
+    ios_clients: set[WebSocket] = set()
 
     # Debug log — recent events (capped).
     debug_log: deque[dict[str, Any]] = deque(maxlen=200)
@@ -76,14 +85,29 @@ def create_app(
     app.state.tts_queue = tts_queue
     app.state.status_queue = status_queue
     app.state.audio_queue = audio_queue
+    app.state.text_response_queue = text_response_queue
     app.state.connected_clients = connected_clients
+    app.state.ios_clients = ios_clients
     app.state.debug_log = debug_log
 
     # ── Public helpers (called by Orchestrator / agents) ─────────────
 
     async def speak(wav_bytes: bytes) -> None:
-        """Enqueue TTS audio to be sent to the iPhone."""
+        """Enqueue TTS audio to be sent to the web client."""
         await tts_queue.put(wav_bytes)
+
+    async def send_text_response(text: str, *, final: bool = True) -> None:
+        """Enqueue a text response for iOS clients (on-device TTS)."""
+        await text_response_queue.put((text, final))
+
+    async def send_warning_text(text: str, urgency: str = "high") -> None:
+        """Send an urgent warning to iOS clients (interrupts speech)."""
+        msg = pack_warning_text(text, urgency)
+        for ws in list(ios_clients):
+            try:
+                await ws.send_bytes(msg)
+            except Exception:
+                logger.warning("Failed to send warning to iOS client")
 
     async def push_status(
         signal: str,
@@ -105,6 +129,8 @@ def create_app(
             debug_log.append(payload)
 
     app.state.speak = speak
+    app.state.send_text_response = send_text_response
+    app.state.send_warning_text = send_warning_text
     app.state.push_status = push_status
 
     # ── Routes ───────────────────────────────────────────────────────
@@ -286,18 +312,22 @@ def create_app(
     async def unified_socket(ws: WebSocket) -> None:
         await ws.accept()
         connected_clients.add(ws)
+        is_ios = False
         logger.info("Client connected (%d total)", len(connected_clients))
 
         async def send_loop() -> None:
-            """Push TTS audio and status updates to the iPhone."""
+            """Push TTS audio/text and status updates to the client."""
             while True:
-                # Wait for either queue to have something.
-                tts_task = asyncio.create_task(tts_queue.get(), name="tts")
-                status_task = asyncio.create_task(status_queue.get(), name="status")
+                waiters = [
+                    asyncio.create_task(tts_queue.get(), name="tts"),
+                    asyncio.create_task(status_queue.get(), name="status"),
+                    asyncio.create_task(
+                        text_response_queue.get(), name="text_resp"
+                    ),
+                ]
 
                 done, pending = await asyncio.wait(
-                    {tts_task, status_task},
-                    return_when=asyncio.FIRST_COMPLETED,
+                    waiters, return_when=asyncio.FIRST_COMPLETED
                 )
 
                 for task in pending:
@@ -305,9 +335,19 @@ def create_app(
 
                 for task in done:
                     result = task.result()
-                    if isinstance(result, bytes):
-                        await ws.send_bytes(pack_tts(result))
+                    if isinstance(result, tuple):
+                        # Text response for iOS client (text, final).
+                        text, final = result
+                        if is_ios:
+                            await ws.send_bytes(
+                                pack_text_response(text, final=final)
+                            )
+                    elif isinstance(result, bytes):
+                        # WAV TTS audio for web client.
+                        if not is_ios:
+                            await ws.send_bytes(pack_tts(result))
                     elif isinstance(result, dict):
+                        # Status update for all clients.
                         await ws.send_bytes(pack_status(result))
 
         sender = asyncio.create_task(send_loop())
@@ -335,6 +375,32 @@ def create_app(
                 elif msg_type == MessageType.AUDIO:
                     await audio_queue.put(payload)
 
+                elif msg_type == MessageType.TRANSCRIPT:
+                    # iOS client sending pre-transcribed text.
+                    if not is_ios:
+                        is_ios = True
+                        ios_clients.add(ws)
+                        logger.info("Client identified as iOS (on-device STT)")
+
+                    transcript = payload.decode("utf-8", errors="replace").strip()
+                    if transcript:
+                        logger.info("iOS transcript: %s", transcript[:120])
+                        orchestrator = getattr(app.state, "orchestrator", None)
+                        if orchestrator:
+                            await orchestrator.handle_transcript(transcript)
+
+                elif msg_type == MessageType.LOCATION:
+                    # iOS client GPS update.
+                    try:
+                        loc = json.loads(payload.decode("utf-8"))
+                        lat = loc.get("lat", 0.0)
+                        lng = loc.get("lng", 0.0)
+                        logger.debug("GPS update: %.6f, %.6f", lat, lng)
+                        # Store latest location on app state for NYC data queries.
+                        app.state.last_location = (lat, lng)
+                    except (json.JSONDecodeError, KeyError):
+                        logger.warning("Bad location payload")
+
         except WebSocketDisconnect:
             logger.info("Client disconnected")
         except Exception:
@@ -342,5 +408,6 @@ def create_app(
         finally:
             sender.cancel()
             connected_clients.discard(ws)
+            ios_clients.discard(ws)
 
     return app

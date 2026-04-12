@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <!-- Camera permission -->
+    <key>NSCameraUsageDescription</key>
+    <string>Camera is used to see your surroundings and detect obstacles, signs, and navigation landmarks.</string>
+
+    <!-- Microphone permission -->
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Microphone is used to hear your voice commands and questions.</string>
+
+    <!-- Location permission -->
+    <key>NSLocationWhenInUseUsageDescription</key>
+    <string>Location is used to provide local navigation information, nearby transit stops, and safety alerts from NYC Open Data.</string>
+
+    <!-- Background modes -->
+    <key>UIBackgroundModes</key>
+    <array>
+        <string>audio</string>
+        <string>location</string>
+    </array>
+
+    <!-- Required device capabilities -->
+    <key>UIRequiredDeviceCapabilities</key>
+    <array>
+        <string>arm64</string>
+        <string>wifi</string>
+        <string>microphone</string>
+        <string>still-camera</string>
+        <string>video-camera</string>
+        <string>location-services</string>
+        <string>gps</string>
+    </array>
+
+    <!-- Supported interface orientations (portrait only for accessibility) -->
+    <key>UISupportedInterfaceOrientations</key>
+    <array>
+        <string>UIInterfaceOrientationPortrait</string>
+    </array>
+
+    <!-- App Transport Security: allow plaintext WebSocket to local network -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+        <key>NSAllowsArbitraryLoads</key>
+        <true/>
+    </dict>
+
+    <!-- Local network usage (Bonjour/mDNS for discovering DGX Spark) -->
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>Spark Sight connects to your DGX Spark device on the local network for AI-powered navigation assistance.</string>
+
+    <!-- Bundle display name -->
+    <key>CFBundleDisplayName</key>
+    <string>Spark Sight</string>
+
+    <!-- Minimum iOS version -->
+    <key>MinimumOSVersion</key>
+    <string>17.0</string>
+
+    <!-- Launch storyboard (use default) -->
+    <key>UILaunchStoryboardName</key>
+    <string>LaunchScreen</string>
+
+    <!-- Status bar style -->
+    <key>UIStatusBarStyle</key>
+    <string>UIStatusBarStyleLightContent</string>
+    <key>UIViewControllerBasedStatusBarAppearance</key>
+    <false/>
+</dict>
+</plist>
