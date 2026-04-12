@@ -1,0 +1,589 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		EF06A77C2F8BCD35002A57BC /* SparkSightApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF06A77B2F8BCD35002A57BC /* SparkSightApp.swift */; };
+		EF06A7802F8BCD36002A57BC /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EF06A77F2F8BCD36002A57BC /* Assets.xcassets */; };
+		EF06A7832F8BCD36002A57BC /* Preview Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = EF06A7822F8BCD36002A57BC /* Preview Assets.xcassets */; };
+		EF06A78D2F8BCD36002A57BC /* SparkSightTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF06A78C2F8BCD36002A57BC /* SparkSightTests.swift */; };
+		EF06A7972F8BCD36002A57BC /* SparkSightUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF06A7962F8BCD36002A57BC /* SparkSightUITests.swift */; };
+		EF06A7992F8BCD36002A57BC /* SparkSightUITestsLaunchTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = EF06A7982F8BCD36002A57BC /* SparkSightUITestsLaunchTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		EF06A7892F8BCD36002A57BC /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = EF06A7702F8BCD35002A57BC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EF06A7772F8BCD35002A57BC;
+			remoteInfo = SparkSight;
+		};
+		EF06A7932F8BCD36002A57BC /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = EF06A7702F8BCD35002A57BC /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = EF06A7772F8BCD35002A57BC;
+			remoteInfo = SparkSight;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		EF06A7782F8BCD35002A57BC /* SparkSight.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = SparkSight.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		EF06A77B2F8BCD35002A57BC /* SparkSightApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkSightApp.swift; sourceTree = "<group>"; };
+		EF06A77F2F8BCD36002A57BC /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		EF06A7822F8BCD36002A57BC /* Preview Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = "Preview Assets.xcassets"; sourceTree = "<group>"; };
+		EF06A7882F8BCD36002A57BC /* SparkSightTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SparkSightTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		EF06A78C2F8BCD36002A57BC /* SparkSightTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkSightTests.swift; sourceTree = "<group>"; };
+		EF06A7922F8BCD36002A57BC /* SparkSightUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = SparkSightUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		EF06A7962F8BCD36002A57BC /* SparkSightUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkSightUITests.swift; sourceTree = "<group>"; };
+		EF06A7982F8BCD36002A57BC /* SparkSightUITestsLaunchTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SparkSightUITestsLaunchTests.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		EF06A7752F8BCD35002A57BC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EF06A7852F8BCD36002A57BC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EF06A78F2F8BCD36002A57BC /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		EF06A76F2F8BCD35002A57BC = {
+			isa = PBXGroup;
+			children = (
+				EF06A77A2F8BCD35002A57BC /* SparkSight */,
+				EF06A78B2F8BCD36002A57BC /* SparkSightTests */,
+				EF06A7952F8BCD36002A57BC /* SparkSightUITests */,
+				EF06A7792F8BCD35002A57BC /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		EF06A7792F8BCD35002A57BC /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				EF06A7782F8BCD35002A57BC /* SparkSight.app */,
+				EF06A7882F8BCD36002A57BC /* SparkSightTests.xctest */,
+				EF06A7922F8BCD36002A57BC /* SparkSightUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		EF06A77A2F8BCD35002A57BC /* SparkSight */ = {
+			isa = PBXGroup;
+			children = (
+				EF06A77B2F8BCD35002A57BC /* SparkSightApp.swift */,
+				EF06A77F2F8BCD36002A57BC /* Assets.xcassets */,
+				EF06A7812F8BCD36002A57BC /* Preview Content */,
+			);
+			path = SparkSight;
+			sourceTree = "<group>";
+		};
+		EF06A7812F8BCD36002A57BC /* Preview Content */ = {
+			isa = PBXGroup;
+			children = (
+				EF06A7822F8BCD36002A57BC /* Preview Assets.xcassets */,
+			);
+			path = "Preview Content";
+			sourceTree = "<group>";
+		};
+		EF06A78B2F8BCD36002A57BC /* SparkSightTests */ = {
+			isa = PBXGroup;
+			children = (
+				EF06A78C2F8BCD36002A57BC /* SparkSightTests.swift */,
+			);
+			path = SparkSightTests;
+			sourceTree = "<group>";
+		};
+		EF06A7952F8BCD36002A57BC /* SparkSightUITests */ = {
+			isa = PBXGroup;
+			children = (
+				EF06A7962F8BCD36002A57BC /* SparkSightUITests.swift */,
+				EF06A7982F8BCD36002A57BC /* SparkSightUITestsLaunchTests.swift */,
+			);
+			path = SparkSightUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		EF06A7772F8BCD35002A57BC /* SparkSight */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EF06A79C2F8BCD36002A57BC /* Build configuration list for PBXNativeTarget "SparkSight" */;
+			buildPhases = (
+				EF06A7742F8BCD35002A57BC /* Sources */,
+				EF06A7752F8BCD35002A57BC /* Frameworks */,
+				EF06A7762F8BCD35002A57BC /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = SparkSight;
+			productName = SparkSight;
+			productReference = EF06A7782F8BCD35002A57BC /* SparkSight.app */;
+			productType = "com.apple.product-type.application";
+		};
+		EF06A7872F8BCD36002A57BC /* SparkSightTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EF06A79F2F8BCD36002A57BC /* Build configuration list for PBXNativeTarget "SparkSightTests" */;
+			buildPhases = (
+				EF06A7842F8BCD36002A57BC /* Sources */,
+				EF06A7852F8BCD36002A57BC /* Frameworks */,
+				EF06A7862F8BCD36002A57BC /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				EF06A78A2F8BCD36002A57BC /* PBXTargetDependency */,
+			);
+			name = SparkSightTests;
+			productName = SparkSightTests;
+			productReference = EF06A7882F8BCD36002A57BC /* SparkSightTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+		EF06A7912F8BCD36002A57BC /* SparkSightUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = EF06A7A22F8BCD36002A57BC /* Build configuration list for PBXNativeTarget "SparkSightUITests" */;
+			buildPhases = (
+				EF06A78E2F8BCD36002A57BC /* Sources */,
+				EF06A78F2F8BCD36002A57BC /* Frameworks */,
+				EF06A7902F8BCD36002A57BC /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				EF06A7942F8BCD36002A57BC /* PBXTargetDependency */,
+			);
+			name = SparkSightUITests;
+			productName = SparkSightUITests;
+			productReference = EF06A7922F8BCD36002A57BC /* SparkSightUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		EF06A7702F8BCD35002A57BC /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 1520;
+				LastUpgradeCheck = 1520;
+				TargetAttributes = {
+					EF06A7772F8BCD35002A57BC = {
+						CreatedOnToolsVersion = 15.2;
+					};
+					EF06A7872F8BCD36002A57BC = {
+						CreatedOnToolsVersion = 15.2;
+						TestTargetID = EF06A7772F8BCD35002A57BC;
+					};
+					EF06A7912F8BCD36002A57BC = {
+						CreatedOnToolsVersion = 15.2;
+						TestTargetID = EF06A7772F8BCD35002A57BC;
+					};
+				};
+			};
+			buildConfigurationList = EF06A7732F8BCD35002A57BC /* Build configuration list for PBXProject "SparkSight" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = EF06A76F2F8BCD35002A57BC;
+			productRefGroup = EF06A7792F8BCD35002A57BC /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				EF06A7772F8BCD35002A57BC /* SparkSight */,
+				EF06A7872F8BCD36002A57BC /* SparkSightTests */,
+				EF06A7912F8BCD36002A57BC /* SparkSightUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		EF06A7762F8BCD35002A57BC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EF06A7832F8BCD36002A57BC /* Preview Assets.xcassets in Resources */,
+				EF06A7802F8BCD36002A57BC /* Assets.xcassets in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EF06A7862F8BCD36002A57BC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EF06A7902F8BCD36002A57BC /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		EF06A7742F8BCD35002A57BC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EF06A77C2F8BCD35002A57BC /* SparkSightApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EF06A7842F8BCD36002A57BC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EF06A78D2F8BCD36002A57BC /* SparkSightTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		EF06A78E2F8BCD36002A57BC /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				EF06A7992F8BCD36002A57BC /* SparkSightUITestsLaunchTests.swift in Sources */,
+				EF06A7972F8BCD36002A57BC /* SparkSightUITests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		EF06A78A2F8BCD36002A57BC /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EF06A7772F8BCD35002A57BC /* SparkSight */;
+			targetProxy = EF06A7892F8BCD36002A57BC /* PBXContainerItemProxy */;
+		};
+		EF06A7942F8BCD36002A57BC /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = EF06A7772F8BCD35002A57BC /* SparkSight */;
+			targetProxy = EF06A7932F8BCD36002A57BC /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		EF06A79A2F8BCD36002A57BC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+			};
+			name = Debug;
+		};
+		EF06A79B2F8BCD36002A57BC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++20";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				LOCALIZATION_PREFERS_STRING_CATALOGS = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		EF06A79D2F8BCD36002A57BC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"SparkSight/Preview Content\"";
+				DEVELOPMENT_TEAM = QB47ZW662P;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SparkSight.SparkSight;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		EF06A79E2F8BCD36002A57BC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_ASSET_PATHS = "\"SparkSight/Preview Content\"";
+				DEVELOPMENT_TEAM = QB47ZW662P;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SparkSight.SparkSight;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		EF06A7A02F8BCD36002A57BC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = QB47ZW662P;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SparkSight.SparkSightTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SparkSight.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/SparkSight";
+			};
+			name = Debug;
+		};
+		EF06A7A12F8BCD36002A57BC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = QB47ZW662P;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.2;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SparkSight.SparkSightTests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/SparkSight.app/$(BUNDLE_EXECUTABLE_FOLDER_PATH)/SparkSight";
+			};
+			name = Release;
+		};
+		EF06A7A32F8BCD36002A57BC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = QB47ZW662P;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SparkSight.SparkSightUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = SparkSight;
+			};
+			name = Debug;
+		};
+		EF06A7A42F8BCD36002A57BC /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_EMBED_SWIFT_STANDARD_LIBRARIES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = QB47ZW662P;
+				GENERATE_INFOPLIST_FILE = YES;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = SparkSight.SparkSightUITests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = SparkSight;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		EF06A7732F8BCD35002A57BC /* Build configuration list for PBXProject "SparkSight" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EF06A79A2F8BCD36002A57BC /* Debug */,
+				EF06A79B2F8BCD36002A57BC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EF06A79C2F8BCD36002A57BC /* Build configuration list for PBXNativeTarget "SparkSight" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EF06A79D2F8BCD36002A57BC /* Debug */,
+				EF06A79E2F8BCD36002A57BC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EF06A79F2F8BCD36002A57BC /* Build configuration list for PBXNativeTarget "SparkSightTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EF06A7A02F8BCD36002A57BC /* Debug */,
+				EF06A7A12F8BCD36002A57BC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		EF06A7A22F8BCD36002A57BC /* Build configuration list for PBXNativeTarget "SparkSightUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				EF06A7A32F8BCD36002A57BC /* Debug */,
+				EF06A7A42F8BCD36002A57BC /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = EF06A7702F8BCD35002A57BC /* Project object */;
+}

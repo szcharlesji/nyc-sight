@@ -233,6 +233,14 @@ class Orchestrator:
                     )
                 await self._handle_find_restroom()
 
+            case PlanningAction.FIND_CLOSURE:
+                # The Planning Agent always resolves find_closure into ANSWER
+                # before returning, so this case is a defensive fallback only.
+                if response.message:
+                    await self._enqueue_speech(
+                        SpeechPriority.PLANNING, response.message
+                    )
+
     # ------------------------------------------------------------------
     # Transcript handling (ASR → Planning Agent)
     # ------------------------------------------------------------------
