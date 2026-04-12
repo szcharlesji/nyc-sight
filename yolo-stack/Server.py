@@ -185,6 +185,12 @@ def _can_interrupt(zone: str, level: str) -> bool:
     if zone == "PERIPHERAL" and level != "CRITICAL":
         return False
 
+    # CENTER + CRITICAL always fires — something very close straight ahead.
+    if zone == "CENTER" and level == "CRITICAL":
+        _throttle.last_ts    = time.time()
+        _throttle.last_level = "CRITICAL"
+        return True
+
     now = time.time()
     elapsed = now - _throttle.last_ts
     escalating = (
