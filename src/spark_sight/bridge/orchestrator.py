@@ -356,7 +356,7 @@ class Orchestrator:
                 continue
 
             if frame_obj.timestamp <= last_ts:
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.5)
                 continue
 
             last_ts = frame_obj.timestamp
@@ -369,7 +369,7 @@ class Orchestrator:
             except Exception:
                 logger.exception("Error in warning loop")
 
-            await asyncio.sleep(0.1)  # cap at ~10 fps
+            await asyncio.sleep(0.5)  # 2 fps
 
     # ------------------------------------------------------------------
     # Speech
